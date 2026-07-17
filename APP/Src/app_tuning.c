@@ -321,12 +321,7 @@ static bool apply_cmd(const char *json, const char **error)
                    ? "grayscale_not_ready" : "motion_busy";
             return false;
         }
-        if (!Safety_ArmRemoteMotion(Bsp_GetTick())) {
-            *error = "link_not_ready";
-            return false;
-        }
         if (!Track_Start()) {
-            Safety_DisarmRemoteMotion();
             *error = Track_Get_Start_Result();
             return false;
         }
@@ -355,12 +350,7 @@ static bool apply_cmd(const char *json, const char **error)
             *error = "motion_busy";
             return false;
         }
-        if (!Safety_ArmRemoteMotion(Bsp_GetTick())) {
-            *error = "link_not_ready";
-            return false;
-        }
         if (!Track_Start_Motor_Test()) {
-            Safety_DisarmRemoteMotion();
             *error = Track_Get_Motor_Test_Result();
             return false;
         }
@@ -382,12 +372,7 @@ static bool apply_cmd(const char *json, const char **error)
             *error = "motion_busy";
             return false;
         }
-        if (!Safety_ArmRemoteMotion(Bsp_GetTick())) {
-            *error = "link_not_ready";
-            return false;
-        }
         if (!Track_Start_Rotation(degrees)) {
-            Safety_DisarmRemoteMotion();
             *error = Track_Get_Rotation_Result();
             return false;
         }
@@ -400,12 +385,7 @@ static bool apply_cmd(const char *json, const char **error)
             *error = "motion_busy";
             return false;
         }
-        if (!Safety_ArmRemoteMotion(Bsp_GetTick())) {
-            *error = "link_not_ready";
-            return false;
-        }
         if (!Track_Start_Heading_Hold()) {
-            Safety_DisarmRemoteMotion();
             *error = Track_Get_Heading_Hold_Result();
             return false;
         }
@@ -507,19 +487,13 @@ static void dispatch_frame(const tc1_frame_t *frame)
             send_ack(frame->msg_id, frame->has_id, false, "cmd", "not authenticated");
             break;
         }
-        /* An authenticated command proves the host link is live. Refresh the
-         * watchdog before motion authorization so the command is not rejected
-         * solely because the periodic ping has not arrived yet. */
-        Safety_NotifyHeartbeat(Bsp_GetTick());
         bool ok = apply_cmd(frame->json, &error);
         send_ack(frame->msg_id, frame->has_id, ok, "cmd",
                  ok ? NULL : error);
         break;
     }
     case TC1_MSG_PING: {
-        /* 心跳: 通知 Safety + 回 pong */
-        Safety_NotifyHeartbeat(Bsp_GetTick());
-        /* 回复 pong (携带 MCU 当前 tick) */
+        /* 心跳仅用于链路诊断；回复 pong (携带 MCU 当前 tick)。 */
         int n = snprintf(s_ack_json, sizeof(s_ack_json),
             "{\"v\":1,\"t\":\"pong\",\"ms\":%lu}", (unsigned long)Bsp_GetTick());
         if (n > 0 && n < (int)sizeof(s_ack_json)) {

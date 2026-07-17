@@ -17,7 +17,14 @@
 - `host/`: TCP bridge, tuning engine, simulator and browser UI
 - `tests/`: host-executed logic and protocol tests
 
-Keep the 5 ms tracking loop non-blocking. ISR code may only service hardware and publish bounded state; parsing, logging and business logic belong in the main loop. On communication loss or invalid sensor data, motor output must fail safe.
+Keep the 5 ms tracking loop non-blocking. ISR code may only service hardware and publish bounded state; parsing, logging and business logic belong in the main loop. On invalid sensor data, motor output must fail safe.
+
+## Host Role
+
+- The host is debug and logging only. It must never be a motion dependency.
+- Host disconnect, TCP/Wi-Fi loss, ESP link drop, or missing heartbeat must not stop, pause, or alter any ongoing motion.
+- Vehicle motion is command-first: accepted onboard commands and the local state machine own motion; host UI is optional observability and tuning.
+- Every command that changes vehicle motion still needs validation and an observable acknowledgement when a host is connected; lack of host does not block execution.
 
 ## Build And Test
 
@@ -45,7 +52,6 @@ python host\simulator.py
 
 - Preserve generated `ti_msp_dl_config.c/.h` manual fixes unless SysConfig regeneration is explicitly intended.
 - Keep tunable parameter ranges identical in firmware, host protocol and UI.
-- Every command that changes vehicle motion needs validation and an observable acknowledgement.
 - Do not flash or erase a connected board until the exact debug probe/port and safe motor state are confirmed.
 - Do not overwrite user-modified build logs or unrelated working-tree changes.
 - Always emit startup and calibration diagnostics for vehicle peripherals, except manually disabled ESP-01S details. Gate periodic vehicle and sensor tuning logs by the relevant motion state, and keep idle/finished states quiet.
@@ -54,7 +60,7 @@ python host\simulator.py
 
 - TC1 `cmd:"rotate"` takes a signed nonzero `deg` in the inclusive range `-180..180`: positive is left/counter-clockwise and negative is right/clockwise.
 - Rotation is accepted only from Safety READY with tracking idle and a calibrated, fresh ICM42688-P frame. The 5 ms rotation state closes on relative yaw, slows near target, corrects overshoot, and returns to READY after three settled frames.
-- A failed ICM42688-P read invalidates the current sample and stops rotation. Encoder, heartbeat, safety revocation, stop command, and angle timeout also cut motion.
+- A failed ICM42688-P read invalidates the current sample and stops rotation. Encoder fault, safety revocation, stop command, and angle timeout also cut motion. Host disconnect or missing heartbeat must not cut motion.
 - Host UI exposes ±90 degree buttons and a custom signed angle. Telemetry rotation fields are `tg`, `ta`, `te`, `rr`; the shared TC1 JSON ceiling is 384 bytes.
 
 ## First Track Test Profile

@@ -112,7 +112,6 @@ REQUEST_ERROR_MESSAGES = {
     "lifted_confirmation_required": "电机测试必须明确确认驱动轮已经架空",
     "encoder_sign_or_stall": "编码器正转符号错误或车轮未转动",
     "grayscale_not_ready": "灰度传感器尚未完成有效的黑白校准",
-    "link_not_ready": "上位机链路尚未建立心跳，请稍后重试",
     "motion_busy": "当前运动尚未结束，请停止或等待自动恢复后重试",
     "invalid cmd": "固件未识别该命令",
     "not authenticated": "认证尚未完成，请等待小车重新连接",
@@ -264,7 +263,7 @@ def on_car_log(line: str):
 
 
 def heartbeat_worker():
-    """Keep a running tuning session armed without blocking web or TCP threads."""
+    """Send diagnostic pings without participating in vehicle motion control."""
     interval_s = config.HEARTBEAT_INTERVAL_MS / 1000.0
     was_connected = False
     heartbeat_ready_at = 0.0
@@ -272,8 +271,7 @@ def heartbeat_worker():
         connected = tcp.is_connected()
         now = time.monotonic()
         if connected and not was_connected:
-            # Start immediately so authenticated motion commands are never
-            # rejected during an artificial post-connect heartbeat gap.
+            # Start immediately so link diagnostics become available quickly.
             heartbeat_ready_at = now
         if connected and now >= heartbeat_ready_at:
             tcp.send(build_ping(int(time.monotonic() * 1000)))

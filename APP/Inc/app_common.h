@@ -29,12 +29,7 @@
 #define APP_TUNING_MODE                   1
 #define APP_TUNING_AUTH_TOKEN             "track_car_2025"
 #define APP_TUNING_TELEM_INTERVAL_MS      100u
-#define APP_TUNING_HEARTBEAT_TIMEOUT_MS   1500u
-#define APP_CONTROL_TICK_MAX_GAP_MS       25u
 #define APP_GRAYSCALE_FRAME_TIMEOUT_MS    50u
-#define APP_ENCODER_MAX_DELTA_PER_TICK    20000
-#define APP_ENCODER_STALL_MIN_TARGET      8
-#define APP_ENCODER_STALL_TICKS           40u  /* 40 * 5ms = 200ms */
 
 /* 0=真实旋转；1=仅回 ACK 的链路测试，绝不驱动电机。 */
 #define APP_TUNING_ROTATE_LINK_TEST_MODE  0

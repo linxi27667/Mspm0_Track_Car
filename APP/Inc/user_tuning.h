@@ -163,13 +163,19 @@
 #define USER_RIGHT_ANGLE_THRESHOLD 4.0f    /* 中心对+左侧连续展开，至少4路黑 */
 #endif
 #ifndef USER_RIGHT_ANGLE_CONFIRM_FRAMES
-#define USER_RIGHT_ANGLE_CONFIRM_FRAMES 3  /* 直角弯连续确认帧数 */
+#define USER_RIGHT_ANGLE_CONFIRM_FRAMES 1  /* 严格角点图案单帧触发；仍需2帧居中历史 */
+#endif
+#ifndef USER_RIGHT_ANGLE_WHITE_FALLBACK_FRAMES
+#define USER_RIGHT_ANGLE_WHITE_FALLBACK_FRAMES 2u /* 居中后连续全白兜底确认帧数 */
+#endif
+#ifndef USER_RIGHT_ANGLE_WHITE_RECENT_MS
+#define USER_RIGHT_ANGLE_WHITE_RECENT_MS 100u /* 全白兜底必须紧跟正常居中线型 */
 #endif
 #ifndef USER_RIGHT_ANGLE_ARM_DELAY
 #define USER_RIGHT_ANGLE_ARM_DELAY  200     /* 启动后短暂稳定，避免漏掉靠近起点的首个角 */
 #endif
 #ifndef USER_RIGHT_ANGLE_TIMEOUT
-#define USER_RIGHT_ANGLE_TIMEOUT   6000    /* 前探、停车、闭环转向和捕线总超时 */
+#define USER_RIGHT_ANGLE_TIMEOUT   7000    /* 前探、停车、闭环转向和捕线总超时 */
 #endif
 #ifndef USER_RIGHT_ANGLE_TARGET_ANGLE
 #define USER_RIGHT_ANGLE_TARGET_ANGLE    90.0f /* IMU按入口航向左转90度 */
@@ -187,10 +193,10 @@
 #define USER_RIGHT_ANGLE_DETECT_COMP_MM  0.0f  /* 检测三帧与制动造成的补偿距离 */
 #endif
 #ifndef USER_RIGHT_ANGLE_APPROACH_SPEED
-#define USER_RIGHT_ANGLE_APPROACH_SPEED  30    /* 首轮实车安全档：前探PWM */
+#define USER_RIGHT_ANGLE_APPROACH_SPEED  28    /* 闭环前探轮速，兼顾距离与停车冲击 */
 #endif
 #ifndef USER_RIGHT_ANGLE_APPROACH_FALLBACK_MS
-#define USER_RIGHT_ANGLE_APPROACH_FALLBACK_MS 500u /* 距离未标定时闭环前探500ms */
+#define USER_RIGHT_ANGLE_APPROACH_FALLBACK_MS 1300u /* 实车单角数据微调：预计约1020计数 */
 #endif
 #ifndef USER_RIGHT_ANGLE_STOP_MS
 #define USER_RIGHT_ANGLE_STOP_MS        100u   /* 原地转向前停车稳定 */
@@ -210,11 +216,32 @@
 #ifndef USER_RIGHT_ANGLE_DONE_FRAMES
 #define USER_RIGHT_ANGLE_DONE_FRAMES      4u   /* 角度与角速度连续稳定帧数 */
 #endif
+#ifndef USER_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG
+#define USER_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG 70.0f /* 此角度后才允许灰度提前接管 */
+#endif
+#ifndef USER_RIGHT_ANGLE_HYBRID_HANDOFF_DEG
+#define USER_RIGHT_ANGLE_HYBRID_HANDOFF_DEG 82.0f /* 不再原地锁死最后几度 */
+#endif
+#ifndef USER_RIGHT_ANGLE_HYBRID_MAX_RATE
+#define USER_RIGHT_ANGLE_HYBRID_MAX_RATE 25.0f /* 接管时最大角速度(deg/s) */
+#endif
+#ifndef USER_RIGHT_ANGLE_HYBRID_LINE_FRAMES
+#define USER_RIGHT_ANGLE_HYBRID_LINE_FRAMES 2u /* 新线连续确认帧数 */
+#endif
 #ifndef USER_RIGHT_ANGLE_CAPTURE_SPEED
-#define USER_RIGHT_ANGLE_CAPTURE_SPEED    26   /* 首轮实车安全档：捕线PWM */
+#define USER_RIGHT_ANGLE_CAPTURE_SPEED    14   /* 混合转弯低速向前捕线 */
 #endif
 #ifndef USER_RIGHT_ANGLE_CAPTURE_TURN_LIMIT
 #define USER_RIGHT_ANGLE_CAPTURE_TURN_LIMIT 8.0f
+#endif
+#ifndef USER_RIGHT_ANGLE_CAPTURE_HEADING_KP
+#define USER_RIGHT_ANGLE_CAPTURE_HEADING_KP 0.20f /* 捕线时航向仅作辅助 */
+#endif
+#ifndef USER_RIGHT_ANGLE_CAPTURE_HEADING_KD
+#define USER_RIGHT_ANGLE_CAPTURE_HEADING_KD 0.04f
+#endif
+#ifndef USER_RIGHT_ANGLE_CAPTURE_HEADING_LIMIT
+#define USER_RIGHT_ANGLE_CAPTURE_HEADING_LIMIT 3.0f
 #endif
 #ifndef USER_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES
 #define USER_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES 3u

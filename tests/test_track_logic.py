@@ -74,13 +74,15 @@ class TrackLogicTests(unittest.TestCase):
                 if (Track_ClassifyLine8(0x1Eu, 0.0f, 4u).type != TRACK_LINE_LEFT_CORNER) return 9;
                 if (Track_ClassifyLine8(0x09u, 0.0f, 4u).type != TRACK_LINE_LEFT_CORNER) return 10;
                 if (Track_ClassifyLine8(0x0Du, 0.0f, 4u).type != TRACK_LINE_LEFT_CORNER) return 11;
+                if (Track_ClassifyLine8(0x0Fu, 0.0f, 8u).type != TRACK_LINE_LEFT_CORNER) return 12;
+                if (Track_ClassifyLine8(0x1Fu, 0.0f, 8u).type != TRACK_LINE_LEFT_CORNER) return 13;
                 return 0;
             }
             '''
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
-    def test_corner_and_capture_require_continuous_frames(self):
+    def test_corner_requires_centered_history_and_capture_requires_frames(self):
         result = compile_and_run(
             r'''
             #include "TASK/track_logic.h"
@@ -93,10 +95,18 @@ class TrackLogicTests(unittest.TestCase):
                 corner = Track_UpdateCornerConfirm(corner, 1u, true);
                 if (corner != 0u) return 1;
                 corner = Track_UpdateCornerConfirm(corner, 2u, true);
-                corner = Track_UpdateCornerConfirm(corner, 2u, true);
-                if (corner != 2u) return 2;
+                if (corner != 1u) return 2;
                 corner = Track_UpdateCornerConfirm(corner, 2u, false);
                 if (corner != 0u) return 3;
+                if (Track_CornerArmed(199u, 0u, 0u, 0u, 200u, 300u)) return 6;
+                if (!Track_CornerArmed(200u, 0u, 0u, 0u, 200u, 300u)) return 7;
+                if (Track_CornerArmed(499u, 0u, 300u, 1u, 200u, 300u)) return 8;
+                if (!Track_CornerArmed(600u, 0u, 300u, 1u, 200u, 300u)) return 9;
+                if (Track_WhiteCornerFallbackReady(1u, 2u, 100u, 90u, 100u)) return 10;
+                if (Track_WhiteCornerFallbackReady(2u, 1u, 100u, 90u, 100u)) return 11;
+                if (!Track_WhiteCornerFallbackReady(2u, 2u, 100u, 90u, 100u)) return 12;
+                if (Track_WhiteCornerFallbackReady(2u, 2u, 201u, 100u, 100u)) return 13;
+                if (!Track_WhiteCornerFallbackReady(2u, 2u, 9u, UINT32_MAX - 10u, 100u)) return 14;
                 for (int i = 0; i < 2; ++i) {
                     capture = Track_UpdateConfirmFrames(
                         capture, Track_CaptureLineValid(good, 1.0f));
@@ -164,7 +174,7 @@ class TrackLogicTests(unittest.TestCase):
         self.assertIn("if (!Track_State_Allows_Motor(Track.state)) return;", vehicle_log)
         self.assertIn("if (!Track_State_Is_LineTracking(Track.state)) return;", grayscale_log)
 
-    def test_safety_health_and_ready_gate(self):
+    def test_safety_health_ignores_heartbeat_and_keeps_sensor_faults(self):
         result = compile_and_run(
             r'''
             #include <stdint.h>
@@ -172,25 +182,15 @@ class TrackLogicTests(unittest.TestCase):
 
             int main(void) {
                 safety_health_t h = {0};
-                h.encoder_left_ok = true;
-                h.encoder_right_ok = true;
-                h.remote_armed = true;
-                h.heartbeat_seen = true;
-                h.last_heartbeat_tick = 100u;
-                h.last_control_tick = 180u;
-                if (Safety_Logic_Check(200u, &h, 500u, 50u, 25u) != SAFETY_LOGIC_OK) return 1;
-                if (Safety_Logic_Check(601u, &h, 500u, 50u, 25u) != SAFETY_LOGIC_HEARTBEAT_LOST) return 2;
-                h.last_heartbeat_tick = UINT32_MAX - 10u;
-                h.last_control_tick = 4u;
-                if (Safety_Logic_Check(9u, &h, 500u, 50u, 25u) != SAFETY_LOGIC_OK) return 3;
-                h.encoder_left_ok = false;
-                if (Safety_Logic_Check(9u, &h, 500u, 50u, 25u) != SAFETY_LOGIC_ENCODER_ANOMALY) return 4;
-                h.encoder_left_ok = true;
+                if (Safety_Logic_Check(200u, &h, 50u) != SAFETY_LOGIC_OK) return 1;
                 h.grayscale_required = true;
                 h.grayscale_seen = true;
                 h.last_grayscale_tick = UINT32_MAX - 10u;
-                if (Safety_Logic_Check(9u, &h, 500u, 50u, 25u) != SAFETY_LOGIC_OK) return 7;
-                if (Safety_Logic_Check(50u, &h, 500u, 50u, 100u) != SAFETY_LOGIC_GRAYSCALE_EXPIRED) return 8;
+                if (Safety_Logic_Check(9u, &h, 50u) != SAFETY_LOGIC_OK) return 7;
+                if (Safety_Logic_Check(50u, &h, 50u) != SAFETY_LOGIC_GRAYSCALE_EXPIRED) return 8;
+                h.grayscale_required = false;
+                h.sensor_abnormal = true;
+                if (Safety_Logic_Check(50u, &h, 50u) != SAFETY_LOGIC_SENSOR_ABNORMAL) return 2;
                 if (!Safety_Logic_CanEnterRotation(0u) ||
                     !Safety_Logic_CanEnterRotation(2u)) return 5;
                 if (Safety_Logic_CanEnterRotation(1u) ||
@@ -205,21 +205,19 @@ class TrackLogicTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
-    def test_encoder_stall_and_impossible_delta_are_faults(self):
+    def test_encoder_zero_speed_is_allowed_and_impossible_delta_is_fault(self):
         result = compile_and_run(
             r'''
             #include "APP/Inc/encoder_health_logic.h"
 
             int main(void) {
-                encoder_health_monitor_t h = {0};
-                for (int i = 0; i < 39; ++i) {
-                    if (!Encoder_Health_UpdateSide(20, 0, 8, 20000, 40, &h.left_stall_ticks)) return 1;
+                for (int i = 0; i < 1000; ++i) {
+                    if (!Encoder_Health_DeltaValid(0, 20000)) return 1;
                 }
-                if (Encoder_Health_UpdateSide(20, 0, 8, 20000, 40, &h.left_stall_ticks)) return 2;
-                if (!Encoder_Health_UpdateSide(20, 3, 8, 20000, 40, &h.left_stall_ticks)) return 3;
-                if (h.left_stall_ticks != 0) return 4;
-                if (Encoder_Health_UpdateSide(20, 20001, 8, 20000, 40, &h.left_stall_ticks)) return 5;
-                if (!Encoder_Health_UpdateSide(0, 0, 8, 20000, 40, &h.left_stall_ticks)) return 6;
+                if (!Encoder_Health_DeltaValid(3, 20000)) return 2;
+                if (!Encoder_Health_DeltaValid(-20000, 20000)) return 3;
+                if (Encoder_Health_DeltaValid(20001, 20000)) return 4;
+                if (Encoder_Health_DeltaValid(-20001, 20000)) return 5;
                 return 0;
             }
             '''
@@ -311,7 +309,9 @@ class TrackLogicTests(unittest.TestCase):
 
         self.assertNotIn("safety_not_ready", tuning_source)
         self.assertIn('"grayscale_not_ready"', tuning_source)
-        self.assertIn('"link_not_ready"', tuning_source)
+        self.assertNotIn('"link_not_ready"', tuning_source)
+        self.assertNotIn("Safety_ArmRemoteMotion", tuning_source)
+        self.assertNotIn("Safety_DisarmRemoteMotion", tuning_source)
         self.assertIn('"motion_busy"', tuning_source)
         self.assertIn("SAFETY_STATE_BOOT", motor_start)
         self.assertIn('elog_w("MOTION", "motion stopped: %s (auto recovery)"',
@@ -321,8 +321,12 @@ class TrackLogicTests(unittest.TestCase):
         common_header = (ROOT / "APP" / "Inc" / "app_common.h").read_text(
             encoding="utf-8"
         )
+        safety_header = (ROOT / "APP" / "Inc" / "safety_logic.h").read_text(
+            encoding="utf-8"
+        )
         host_config = (ROOT / "host" / "config.py").read_text(encoding="utf-8")
-        self.assertIn("APP_TUNING_HEARTBEAT_TIMEOUT_MS   1500u", common_header)
+        self.assertNotIn("HEARTBEAT_TIMEOUT", common_header)
+        self.assertNotIn("HEARTBEAT", safety_header)
         self.assertIn("HEARTBEAT_INTERVAL_MS = 250", host_config)
 
     def test_right_angle_heading_lock_requires_angle_and_rate(self):
@@ -371,25 +375,6 @@ class TrackLogicTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
-    def test_start_pattern_requires_one_to_three_centered_black_channels(self):
-        result = compile_and_run(
-            r'''
-            #include "TASK/track_logic.h"
-
-            int main(void) {
-                if (Track_StartPatternValid(0x00u)) return 1;
-                if (!Track_StartPatternValid(0x04u)) return 2;
-                if (!Track_StartPatternValid(0x18u)) return 3;
-                if (!Track_StartPatternValid(0x38u)) return 4;
-                if (Track_StartPatternValid(0x03u)) return 5;
-                if (Track_StartPatternValid(0x3Cu)) return 6;
-                if (Track_StartPatternValid(0xFFu)) return 7;
-                return 0;
-            }
-            '''
-        )
-        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-
     def test_corner_phases_and_lap_count(self):
         result = compile_and_run(
             r'''
@@ -428,26 +413,40 @@ class TrackLogicTests(unittest.TestCase):
         self.assertIn("Track.state = TRACK_STATE_FINISHED;", timeout)
         self.assertIn("Track_Motor_Stop_Immediate();", timeout)
         self.assertIn("Track.corner_phase == TRACK_CORNER_PIVOT", source)
+        self.assertIn('CORNER_RECOVER pivot_timeout -> capture', source)
         self.assertIn("Track_EncoderDistanceReached", source)
         self.assertNotIn("CORNER_FAIL reason=approach_cal_missing", source)
         self.assertIn("Track.corner_phase = TRACK_CORNER_APPROACH;", source)
         self.assertIn("TRACK_RIGHT_ANGLE_APPROACH_FALLBACK_MS", source)
+        self.assertIn('Track_BeginRightAngle(now, digital_mask, "mask");', source)
+        self.assertIn('Track_BeginRightAngle(now, digital_mask, "white");', source)
+        self.assertIn("Track.line_mask_history = (Track.line_mask_history << 8)", source)
         self.assertIn("Track_Apply_Rotate_Envelope(angle_error, Imu_Sensor.gyro_z);", source)
         self.assertNotIn("Track_RightAngle_PivotPwm", source)
         self.assertIn("if (!pivot_turn) {", source)
         self.assertNotIn("USER_RIGHT_ANGLE_APPROACH_MS", source)
         self.assertIn("App_Motor_Enable_Speed_PID(false);", source)
         self.assertIn("TRACK_MOTOR_INNER_MIN", source)
+        completion = source.split("void Track_Check_RightAngle_Completion(void)", 1)[1].split(
+            "static void Track_Motor_Output", 1
+        )[0]
+        self.assertNotIn("Track.state = TRACK_STATE_FINISHED", completion)
+        self.assertNotIn("Track_Motor_Stop_Immediate", completion)
+        self.assertNotIn("Safety_TransitionToFinished", completion)
+        self.assertIn("LAP_TARGET_REACHED", completion)
 
-    def test_line_lost_stops_safety_and_manual_stop_returns_ready(self):
+    def test_line_lost_does_not_stop_and_manual_stop_returns_ready(self):
         track_source = (ROOT / "TASK" / "track.c").read_text(encoding="utf-8")
-        line_lost = track_source.split("static void Track_Handle_LineLost", 1)[1].split(
-            "static void Track_Handle_RightAngle", 1
+        detect = track_source.split("static void Track_Detect_Pattern", 1)[1].split(
+            "static void Track_Motor_Stop_Immediate", 1
         )[0]
         stop = track_source.split("void Track_Stop(void)", 1)[1].split(
             "bool Track_Start_Rotation", 1
         )[0]
-        self.assertIn("Safety_TransitionToFinished();", line_lost)
+        self.assertNotIn("Track.state = TRACK_STATE_LINE_LOST", detect)
+        self.assertNotIn("LINE_FAIL reason=lost", detect)
+        self.assertNotIn("LINE_FAIL reason=invalid", detect)
+        self.assertNotIn("Track_Handle_LineLost", track_source)
         self.assertLess(
             stop.index("Safety_TransitionToFinished();"),
             stop.index("Safety_TransitionToReady();"),
@@ -462,13 +461,19 @@ class TrackLogicTests(unittest.TestCase):
         )[0]
         self.assertNotIn("SAFETY_STATE_FINISHED", start)
 
-    def test_start_validation_precedes_motor_arm_and_rejection_is_acked(self):
+    def test_start_does_not_reject_current_line_pattern_and_result_is_acked(self):
         track_source = (ROOT / "TASK" / "track.c").read_text(encoding="utf-8")
         start = track_source.split("bool Track_Start(void)", 1)[1].split(
             "void Track_Stop(void)", 1
         )[0]
+        self.assertNotIn("Track_StartPatternValid", start)
+        self.assertNotIn("invalid_start_pattern", start)
         self.assertLess(
-            start.index("Track_StartPatternValid"),
+            start.index("Track_Imu_Healthy"),
+            start.index("Safety_TransitionToRunning"),
+        )
+        self.assertLess(
+            start.index("Grayscale_Calibration_Valid"),
             start.index("Safety_TransitionToRunning"),
         )
 
@@ -529,6 +534,14 @@ class TrackLogicTests(unittest.TestCase):
                 if (Track_Rotate_ShouldCoast(5.0f, -1.0f, 3.5f, 4.0f)) return 15;
                 if (Track_Rotate_ShouldCoast(5.0f, 0.0f, 3.5f, 4.0f)) return 16;
                 if (Track_Rotate_ShouldCoast(5.0f, 8.0f, 4.0f, 4.0f)) return 17;
+                if (Track_CaptureBlendTurn(0.0f, -1.5f, true, 3.5f, 8.0f) != -5.25f) return 18;
+                if (Track_CaptureBlendTurn(2.0f, -3.5f, true, 3.5f, 8.0f) != -8.0f) return 19;
+                if (Track_CaptureBlendTurn(2.0f, -3.5f, false, 3.5f, 8.0f) != 2.0f) return 20;
+                if (Track_RightAngle_HybridHandoff(69.0f, 0.0f, 2u, 70.0f, 82.0f, 25.0f, 2u)) return 21;
+                if (Track_RightAngle_HybridHandoff(75.0f, 0.0f, 1u, 70.0f, 82.0f, 25.0f, 2u)) return 22;
+                if (!Track_RightAngle_HybridHandoff(75.0f, 20.0f, 2u, 70.0f, 82.0f, 25.0f, 2u)) return 23;
+                if (!Track_RightAngle_HybridHandoff(82.0f, 20.0f, 0u, 70.0f, 82.0f, 25.0f, 2u)) return 24;
+                if (Track_RightAngle_HybridHandoff(90.0f, 30.0f, 2u, 70.0f, 82.0f, 25.0f, 2u)) return 25;
                 Track_Rotate_Command(90.0f, 30, &left, &right);
                 if (left >= 0 || right <= 0) return 7;
                 Track_Rotate_Command(-90.0f, 30, &left, &right);
@@ -568,8 +581,16 @@ class TrackLogicTests(unittest.TestCase):
         self.assertIn("USER_ROTATE_PID_BLEND_ZONE_DEG   25.0f", tuning)
         self.assertIn("USER_ROTATE_PID_FINE_MAX_SPEED    7.0f", tuning)
         self.assertIn("USER_ROTATE_PID_COAST_OUTPUT    4.0f", tuning)
-        self.assertIn("USER_RIGHT_ANGLE_APPROACH_FALLBACK_MS 500u", tuning)
-        self.assertIn("USER_RIGHT_ANGLE_TIMEOUT   6000", tuning)
+        self.assertIn("USER_RIGHT_ANGLE_APPROACH_SPEED  28", tuning)
+        self.assertIn("USER_RIGHT_ANGLE_CONFIRM_FRAMES 1", tuning)
+        self.assertIn("USER_RIGHT_ANGLE_WHITE_FALLBACK_FRAMES 2u", tuning)
+        self.assertIn("USER_RIGHT_ANGLE_WHITE_RECENT_MS 100u", tuning)
+        self.assertIn("USER_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG 70.0f", tuning)
+        self.assertIn("USER_RIGHT_ANGLE_HYBRID_HANDOFF_DEG 82.0f", tuning)
+        self.assertIn("USER_RIGHT_ANGLE_HYBRID_LINE_FRAMES 2u", tuning)
+        self.assertIn("USER_RIGHT_ANGLE_CAPTURE_SPEED    14", tuning)
+        self.assertIn("USER_RIGHT_ANGLE_APPROACH_FALLBACK_MS 1300u", tuning)
+        self.assertIn("USER_RIGHT_ANGLE_TIMEOUT   7000", tuning)
         self.assertNotIn("USER_RIGHT_ANGLE_PIVOT_MAX_PWM", tuning)
 
     def test_rotation_requires_twenty_continuous_settle_frames(self):
@@ -661,6 +682,7 @@ class TrackLogicTests(unittest.TestCase):
         self.assertIn("App_Motor_Enable_Speed_PID(true);", track_source)
         self.assertIn("Motor_Set_Speed(Track.left_speed);", output)
         self.assertIn("Motor_Right_Set_Speed(Track.right_speed);", output)
+        self.assertIn("!pivot_turn && !capture_turn", output)
 
         motor_source = (ROOT / "APP" / "Src" / "app_encoder_motor.c").read_text(
             encoding="utf-8"
@@ -673,20 +695,16 @@ class TrackLogicTests(unittest.TestCase):
             update.index("if (!motor->use_speed_pid) return;"),
         )
 
-    def test_five_white_frames_finish_without_counting_a_corner(self):
+    def test_white_frames_keep_following_without_counting_a_corner(self):
         source = (ROOT / "TASK" / "track.c").read_text(encoding="utf-8")
         detect = source.split("static void Track_Detect_Pattern", 1)[1].split(
             "static void Track_Motor_Stop_Immediate", 1
         )[0]
-        lost = source.split("static void Track_Handle_LineLost", 1)[1].split(
-            "static void Track_Handle_RightAngle", 1
-        )[0]
-        self.assertIn("TRACK_LINE_LOST_CONFIRM_FRAMES", detect)
-        self.assertIn("Track.state = TRACK_STATE_LINE_LOST;", detect)
-        self.assertIn("Track.state = TRACK_STATE_FINISHED;", lost)
-        self.assertIn("Track_Motor_Stop_Immediate();", lost)
-        self.assertNotIn("right_angle_count", lost)
-        self.assertNotIn("search", lost.lower())
+        self.assertIn("TRACK_RIGHT_ANGLE_WHITE_FALLBACK_FRAMES", detect)
+        self.assertNotIn("TRACK_LINE_LOST_CONFIRM_FRAMES", detect)
+        self.assertNotIn("Track.state = TRACK_STATE_LINE_LOST;", detect)
+        self.assertNotIn("Track.state = TRACK_STATE_FINISHED;", detect)
+        self.assertNotIn("Track_Handle_LineLost", source)
 
     def test_rotate_timeout_is_wrap_safe(self):
         result = compile_and_run(

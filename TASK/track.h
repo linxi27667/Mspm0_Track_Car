@@ -43,12 +43,21 @@
 #define TRACK_RIGHT_ANGLE_APPROACH_FALLBACK_MS USER_RIGHT_ANGLE_APPROACH_FALLBACK_MS
 #define TRACK_RIGHT_ANGLE_STOP_MS           USER_RIGHT_ANGLE_STOP_MS
 #define TRACK_RIGHT_ANGLE_RETRIGGER_DELAY   USER_RIGHT_ANGLE_RETRIGGER_DELAY
+#define TRACK_RIGHT_ANGLE_WHITE_FALLBACK_FRAMES USER_RIGHT_ANGLE_WHITE_FALLBACK_FRAMES
+#define TRACK_RIGHT_ANGLE_WHITE_RECENT_MS USER_RIGHT_ANGLE_WHITE_RECENT_MS
 #define TRACK_RIGHT_ANGLE_TURN_LIMIT        USER_RIGHT_ANGLE_TURN_LIMIT
 #define TRACK_RIGHT_ANGLE_DONE_ERROR        USER_RIGHT_ANGLE_DONE_ERROR
 #define TRACK_RIGHT_ANGLE_DONE_RATE         USER_RIGHT_ANGLE_DONE_RATE
 #define TRACK_RIGHT_ANGLE_DONE_FRAMES       USER_RIGHT_ANGLE_DONE_FRAMES
+#define TRACK_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG USER_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG
+#define TRACK_RIGHT_ANGLE_HYBRID_HANDOFF_DEG USER_RIGHT_ANGLE_HYBRID_HANDOFF_DEG
+#define TRACK_RIGHT_ANGLE_HYBRID_MAX_RATE USER_RIGHT_ANGLE_HYBRID_MAX_RATE
+#define TRACK_RIGHT_ANGLE_HYBRID_LINE_FRAMES USER_RIGHT_ANGLE_HYBRID_LINE_FRAMES
 #define TRACK_RIGHT_ANGLE_CAPTURE_SPEED     USER_RIGHT_ANGLE_CAPTURE_SPEED
 #define TRACK_RIGHT_ANGLE_CAPTURE_TURN_LIMIT USER_RIGHT_ANGLE_CAPTURE_TURN_LIMIT
+#define TRACK_RIGHT_ANGLE_CAPTURE_HEADING_KP USER_RIGHT_ANGLE_CAPTURE_HEADING_KP
+#define TRACK_RIGHT_ANGLE_CAPTURE_HEADING_KD USER_RIGHT_ANGLE_CAPTURE_HEADING_KD
+#define TRACK_RIGHT_ANGLE_CAPTURE_HEADING_LIMIT USER_RIGHT_ANGLE_CAPTURE_HEADING_LIMIT
 #define TRACK_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES USER_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES
 
 /* --- LINE_FOLLOW 陀螺仪角速度阻尼 (国一方案核心) ---
@@ -56,10 +65,6 @@
  * 本车极性: turn_output = line_pid_output + GYRO_DAMP * gyro_z
  * 调参: 直道抖动→加大(0.15→0.3), 弯道跟踪迟钝→减小(0.15→0.08) */
 #define TRACK_LINE_FOLLOW_GYRO_DAMP       USER_LINE_FOLLOW_GYRO_DAMP
-
-/* --- 丢线检测 --- */
-#define TRACK_LINE_LOST_MAX_BLACK         1
-#define TRACK_LINE_LOST_CONFIRM_FRAMES    5     /* 连续5帧全白才确认丢线(抗干扰) */
 
 /* --- 变速策略 --- */
 #define TRACK_SPEED_STRAIGHT              USER_TRACK_SPEED_STRAIGHT
@@ -129,6 +134,8 @@ typedef struct {
     track_corner_phase_t corner_phase;
     track_line_type_t line_type;
     uint8_t  line_mask;
+    uint32_t line_mask_history;     /* 最近4帧mask，最旧字节在高位 */
+    uint32_t last_centered_at;      /* 最近一次正常居中线型时刻 */
 
     /* --- 陀螺仪辅助 (国一方案) --- */
     float    gyro_rate;             /* 当前Z轴角速度(deg/s), LINE_FOLLOW阻尼用 */
@@ -240,7 +247,7 @@ void Track_Abort_Motor_Test(const char *result);
 uint8_t Track_Get_Motor_Test_Phase(void);
 int32_t Track_Get_Motor_Test_Target(void);
 const char *Track_Get_Motor_Test_Result(void);
-void Track_Check_RightAngle_Completion(void); /* 正方形直角计圈检查 */
+void Track_Check_RightAngle_Completion(void); /* 仅更新圈数遥测，不自动停车 */
 void Track_Set_Circles(uint8_t n);      /* 设置目标圈数 */
 void Track_Set_Speed(int32_t base_speed); /* 设置基础速度 */
 void Track_Set_TrackPID(float kp, float ki, float kd); /* 调循迹PID */

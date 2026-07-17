@@ -3,7 +3,7 @@
  * @brief   安全状态机 — 唯一授权电机输出的模块。
  *
  *          状态: BOOT → CALIBRATING → READY → RUNNING → FINISHED。
- *          运行期间持续检查控制节拍、编码器和传感器健康；远程启动还要求心跳。
+ *          运行期间仅由IMU与灰度传感器故障撤销运动授权。
  *
  *          核心原则: Track/PID 可计算期望速度，但电机输出
  *          仅当 Safety_AllowsMotorOutput() 返回 true 时才执行。
@@ -32,9 +32,6 @@ typedef enum {
     SAFETY_FAULT_NONE = 0,
     SAFETY_FAULT_GRAYSCALE_EXPIRED,      /* 灰度帧过期 */
     SAFETY_FAULT_CALIBRATION_INCOMPLETE, /* 校准未完成 */
-    SAFETY_FAULT_CONTROL_TICK_MISSED,    /* 控制漏期 */
-    SAFETY_FAULT_ENCODER_ANOMALY,        /* 编码器异常 */
-    SAFETY_FAULT_HEARTBEAT_LOST,         /* TUNING心跳丢失 */
     SAFETY_FAULT_SENSOR_ABNORMAL,        /* 传感器抬起/异常 */
     SAFETY_FAULT_MANUAL_STOP,            /* 手动停止 */
     SAFETY_FAULT_LINE_LOST_TIMEOUT,      /* 丢线超时 */
@@ -60,8 +57,6 @@ void Safety_ClearFault(void);  /* 人工确认后清除故障，电机保持关�
  * 控制tick — 每5ms由主循环调用，按状态授权电机输出。
  * ============================================================ */
 bool Safety_ControlTick(void);
-bool Safety_ArmRemoteMotion(uint32_t tick);
-void Safety_DisarmRemoteMotion(void);
 
 /* ============================================================
  * 查询接口
@@ -78,12 +73,6 @@ const char *Safety_FaultName(safety_fault_t fault);
 
 /* 更新最近有效灰度帧时间。 */
 void Safety_NotifyGrayscaleFrame(uint32_t tick);
-
-/* 更新左右编码器健康状态。 */
-void Safety_NotifyEncoderHealth(bool left_ok, bool right_ok);
-
-/* 更新远程调参心跳。 */
-void Safety_NotifyHeartbeat(uint32_t tick);
 
 /* 报告不可继续运动的传感器异常。 */
 void Safety_NotifySensorAbnormal(void);

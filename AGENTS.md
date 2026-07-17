@@ -17,7 +17,14 @@
 - `host/`: TCP bridge, tuning engine, simulator and browser UI
 - `tests/`: host-executed logic and protocol tests
 
-Keep the 5 ms tracking loop non-blocking. ISR code may only service hardware and publish bounded state; parsing, logging and business logic belong in the main loop. On communication loss or invalid sensor data, motor output must fail safe.
+Keep the 5 ms tracking loop non-blocking. ISR code may only service hardware and publish bounded state; parsing, logging and business logic belong in the main loop. On invalid sensor data, motor output must fail safe.
+
+## Host Role
+
+- The host is debug and logging only. It must never be a motion dependency.
+- Host disconnect, TCP/Wi-Fi loss, ESP link drop, or missing heartbeat must not stop, pause, or alter any ongoing motion.
+- Vehicle motion is command-first: accepted onboard commands and the local state machine own motion; host UI is optional observability and tuning.
+- Every command that changes vehicle motion still needs validation and an observable acknowledgement when a host is connected; lack of host does not block execution.
 
 ## Build And Test
 
@@ -45,6 +52,5 @@ python host\simulator.py
 
 - Preserve generated `ti_msp_dl_config.c/.h` manual fixes unless SysConfig regeneration is explicitly intended.
 - Keep tunable parameter ranges identical in firmware, host protocol and UI.
-- Every command that changes vehicle motion needs validation and an observable acknowledgement.
 - Do not flash or erase a connected board until the exact debug probe/port and safe motor state are confirmed.
 - Do not overwrite user-modified build logs or unrelated working-tree changes.

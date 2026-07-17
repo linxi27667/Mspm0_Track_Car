@@ -6,8 +6,8 @@
  *            1. Track/PID 可计算期望速度，但电机输出仅当
  *               Safety_AllowsMotorOutput() 返回 true 时才执行。
  *            2. BOOT/CALIBRATING/READY/FINISHED 状态始终切断 PWM。
- *            3. 运行中控制节拍、编码器、传感器异常立即失效安全停车。
- *            4. 远程运动命令必须有新鲜心跳，掉线后立即停车。
+ *            3. 运行中仅IMU与灰度传感器异常失效安全停车。
+ *            4. 通信与心跳仅用于诊断，不参与运动授权。
  *
  * @note    本模块不直接操作硬件寄存器，通过 BSP/APP API 切断电机:
  *            App_Motor_Enable_Speed_PID(false) — 切开环
@@ -73,9 +73,6 @@ static const char *s_fault_names[] = {
     "NONE",
     "GRAYSCALE_EXPIRED",
     "CALIBRATION_INCOMPLETE",
-    "CONTROL_TICK_MISSED",
-    "ENCODER_ANOMALY",
-    "HEARTBEAT_LOST",
     "SENSOR_ABNORMAL",
     "MANUAL_STOP",
     "LINE_LOST_TIMEOUT"
@@ -99,16 +96,10 @@ void Safety_Init(void)
     s_fault                = SAFETY_FAULT_NONE;
     s_finished_at          = 0u;
     s_calibration_complete = false;
-    s_health.remote_armed = false;
     s_health.grayscale_required = false;
     s_health.grayscale_seen = false;
-    s_health.heartbeat_seen = false;
-    s_health.encoder_left_ok = true;
-    s_health.encoder_right_ok = true;
     s_health.sensor_abnormal = false;
-    s_health.last_heartbeat_tick = 0u;
     s_health.last_grayscale_tick = 0u;
-    s_health.last_control_tick = Bsp_GetTick();
 
     Safety_CutMotor();
     elog_i("SAFETY", "init: state=BOOT, motor cut");
@@ -158,7 +149,6 @@ void Safety_TransitionToRunning(void)
 
     s_state = SAFETY_STATE_RUNNING;
     s_health.grayscale_required = true;
-    s_health.last_control_tick = Bsp_GetTick();
 
     elog_i("SAFETY", "-> RUNNING (motor armed)");
 }
@@ -171,7 +161,6 @@ bool Safety_TransitionToRotation(void)
 
     s_state = SAFETY_STATE_RUNNING;
     s_health.grayscale_required = false;
-    s_health.last_control_tick = Bsp_GetTick();
     elog_i("SAFETY", "-> RUNNING (rotation)");
     return true;
 }
@@ -188,7 +177,6 @@ void Safety_TransitionAfterRotation(void)
         s_state = SAFETY_STATE_BOOT;
         elog_i("SAFETY", "rotation ended -> BOOT (gray calibration pending)");
     }
-    s_health.remote_armed = false;
     s_health.grayscale_required = false;
 }
 
@@ -201,7 +189,6 @@ bool Safety_TransitionToBenchTest(void)
 
     s_state = SAFETY_STATE_RUNNING;
     s_health.grayscale_required = false;
-    s_health.last_control_tick = Bsp_GetTick();
     elog_i("SAFETY", "-> RUNNING (motor bench test)");
     return true;
 }
@@ -212,7 +199,6 @@ void Safety_TransitionAfterBenchTest(void)
 
     Safety_CutMotor();
     s_state = s_calibration_complete ? SAFETY_STATE_READY : SAFETY_STATE_BOOT;
-    s_health.remote_armed = false;
     s_health.grayscale_required = false;
     elog_i("SAFETY", "motor bench test ended -> %s",
            Safety_StateName(s_state));
@@ -223,7 +209,6 @@ void Safety_TransitionToFinished(void)
     if (s_state == SAFETY_STATE_FAULT) return;
     s_state = SAFETY_STATE_FINISHED;
     s_finished_at = Bsp_GetTick();
-    s_health.remote_armed = false;
     s_health.grayscale_required = false;
     Safety_CutMotor();
     elog_i("SAFETY", "-> FINISHED");
@@ -235,7 +220,6 @@ void Safety_EnterFault(safety_fault_t fault)
 
     s_state = SAFETY_STATE_FAULT;
     s_fault = fault;
-    s_health.remote_armed = false;
     Safety_CutMotor();
     if (Safety_FaultIsUserVisible(fault)) {
         elog_e("SAFETY", "-> FAULT: %s", Safety_FaultName(fault));
@@ -254,12 +238,8 @@ void Safety_ClearFault(void)
     recovered_fault = s_fault;
     s_fault = SAFETY_FAULT_NONE;
     s_state = s_calibration_complete ? SAFETY_STATE_READY : SAFETY_STATE_BOOT;
-    s_health.remote_armed = false;
     s_health.grayscale_required = false;
-    s_health.encoder_left_ok = true;
-    s_health.encoder_right_ok = true;
     s_health.sensor_abnormal = false;
-    s_health.last_control_tick = Bsp_GetTick();
     if (Safety_FaultIsUserVisible(recovered_fault)) {
         elog_i("SAFETY", "auto recovered -> %s", Safety_StateName(s_state));
     } else {
@@ -308,17 +288,11 @@ bool Safety_ControlTick(void)
     if (s_state == SAFETY_STATE_RUNNING) {
         uint32_t now = Bsp_GetTick();
         safety_logic_result_t result = Safety_Logic_Check(
-            now, &s_health, APP_TUNING_HEARTBEAT_TIMEOUT_MS,
-            APP_GRAYSCALE_FRAME_TIMEOUT_MS,
-            APP_CONTROL_TICK_MAX_GAP_MS);
-        s_health.last_control_tick = now;
+            now, &s_health, APP_GRAYSCALE_FRAME_TIMEOUT_MS);
         if (result != SAFETY_LOGIC_OK) {
             static const safety_fault_t fault_map[] = {
                 SAFETY_FAULT_NONE,
                 SAFETY_FAULT_GRAYSCALE_EXPIRED,
-                SAFETY_FAULT_CONTROL_TICK_MISSED,
-                SAFETY_FAULT_ENCODER_ANOMALY,
-                SAFETY_FAULT_HEARTBEAT_LOST,
                 SAFETY_FAULT_SENSOR_ABNORMAL,
             };
             Safety_EnterFault(fault_map[result]);
@@ -327,21 +301,6 @@ bool Safety_ControlTick(void)
         return true;
     }
     return false;
-}
-
-bool Safety_ArmRemoteMotion(uint32_t tick)
-{
-    if (!s_health.heartbeat_seen ||
-        (uint32_t)(tick - s_health.last_heartbeat_tick) > APP_TUNING_HEARTBEAT_TIMEOUT_MS) {
-        return false;
-    }
-    s_health.remote_armed = true;
-    return true;
-}
-
-void Safety_DisarmRemoteMotion(void)
-{
-    s_health.remote_armed = false;
 }
 
 /* ============================================================
@@ -384,21 +343,6 @@ void Safety_NotifyGrayscaleFrame(uint32_t tick)
 {
     s_health.last_grayscale_tick = tick;
     s_health.grayscale_seen = true;
-}
-
-void Safety_NotifyEncoderHealth(bool left_ok, bool right_ok)
-{
-    s_health.encoder_left_ok = left_ok;
-    s_health.encoder_right_ok = right_ok;
-    if (s_state == SAFETY_STATE_RUNNING && (!left_ok || !right_ok)) {
-        Safety_EnterFault(SAFETY_FAULT_ENCODER_ANOMALY);
-    }
-}
-
-void Safety_NotifyHeartbeat(uint32_t tick)
-{
-    s_health.last_heartbeat_tick = tick;
-    s_health.heartbeat_seen = true;
 }
 
 void Safety_NotifySensorAbnormal(void)

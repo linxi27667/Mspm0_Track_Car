@@ -10,7 +10,6 @@
 #include "app_pid.h"
 #include "app_safety.h"
 #include "motor_speed_logic.h"
-#include "encoder_health_logic.h"
 #include "encoder_quadrature_logic.h"
 #include <elog.h>
 
@@ -29,7 +28,6 @@ static bsp_pid_t s_right_speed_pid;
 static float     s_speed_scale_left  = MOTOR_SPEED_SCALE_LEFT_DEFAULT;
 static float     s_speed_scale_right = MOTOR_SPEED_SCALE_RIGHT_DEFAULT;
 static float     s_left_speed_filtered;
-static encoder_health_monitor_t s_encoder_health;
 static float     s_right_speed_filtered;
 
 /* ================= 1. 硬件底层函数 (HW_ 前缀) ================= */
@@ -217,22 +215,10 @@ void App_Motor_Speed_PID_Update(void)
                             s_speed_scale_left, &s_left_speed_filtered);
     Speed_PID_Update_Single(&Motor_Right, &s_right_speed_pid,
                             s_speed_scale_right, &s_right_speed_filtered);
-    bool left_ok = Encoder_Health_UpdateSide(
-        Motor_Left.target_speed, Motor_Left.encoder_speed,
-        APP_ENCODER_STALL_MIN_TARGET, APP_ENCODER_MAX_DELTA_PER_TICK,
-        APP_ENCODER_STALL_TICKS, &s_encoder_health.left_stall_ticks);
-    bool right_ok = Encoder_Health_UpdateSide(
-        Motor_Right.target_speed, Motor_Right.encoder_speed,
-        APP_ENCODER_STALL_MIN_TARGET, APP_ENCODER_MAX_DELTA_PER_TICK,
-        APP_ENCODER_STALL_TICKS, &s_encoder_health.right_stall_ticks);
-    Safety_NotifyEncoderHealth(left_ok, right_ok);
 }
 
 void App_Motor_Enable_Speed_PID(bool enable)
 {
-    /* 每次运动模式切换都重新开始连续堵转计时，禁止跨停车间隔累计。 */
-    s_encoder_health.left_stall_ticks = 0u;
-    s_encoder_health.right_stall_ticks = 0u;
     Motor_Left.use_speed_pid  = enable;
     Motor_Right.use_speed_pid = enable;
 

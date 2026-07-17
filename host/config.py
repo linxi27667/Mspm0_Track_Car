@@ -19,7 +19,7 @@ logger = logging.getLogger("config")
 
 class Config:
     TUNING_AUTH_TOKEN = "track_car_2025"
-    # Six missed 250 ms heartbeats reach the 1500 ms firmware stop timeout.
+    # Diagnostic ping cadence; missed heartbeats never alter vehicle motion.
     HEARTBEAT_INTERVAL_MS = 250
 
     # TCP server 监听端口（与 app_esp01s_cfg.h ESP01S_SERVER_PORT 一致）
