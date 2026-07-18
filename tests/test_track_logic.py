@@ -406,14 +406,16 @@ class TrackLogicTests(unittest.TestCase):
         )[0]
         self.assertNotIn("case TRACK_STATE_START_LINE", update_switch)
         self.assertNotIn("case TRACK_STATE_CROSS", update_switch)
-        timeout = source.split('APP_TRACK_LOG_W("TRACK", "CORNER_FAIL reason=timeout', 1)[0].rsplit(
+        timeout = source.split('APP_TRACK_LOG_W("TRACK", "CORNER_RETRY capture_timeout', 1)[0].rsplit(
             "if (Track_Timeout_Reached(now, Track.corner_started_at", 1
         )[1]
         self.assertNotIn("right_angle_count++", timeout)
-        self.assertIn("Track.state = TRACK_STATE_FINISHED;", timeout)
-        self.assertIn("Track_Motor_Stop_Immediate();", timeout)
+        self.assertNotIn("Track.state = TRACK_STATE_FINISHED;", timeout)
+        self.assertNotIn("Track_Motor_Stop_Immediate();", timeout)
         self.assertIn("Track.corner_phase == TRACK_CORNER_PIVOT", source)
-        self.assertIn('CORNER_RECOVER pivot_timeout -> capture', source)
+        self.assertIn('CORNER_RETRY pivot_timeout keep_pivot', source)
+        self.assertIn('CORNER_RETRY capture_timeout keep_capture', source)
+        self.assertIn("turned_abs >= TRACK_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG &&", source)
         self.assertIn("Track_EncoderDistanceReached", source)
         self.assertNotIn("CORNER_FAIL reason=approach_cal_missing", source)
         self.assertIn("Track.corner_phase = TRACK_CORNER_APPROACH;", source)
@@ -447,6 +449,12 @@ class TrackLogicTests(unittest.TestCase):
         self.assertNotIn("LINE_FAIL reason=lost", detect)
         self.assertNotIn("LINE_FAIL reason=invalid", detect)
         self.assertNotIn("Track_Handle_LineLost", track_source)
+        line_follow = track_source.split("case TRACK_STATE_LINE_FOLLOW:", 1)[1].split(
+            "case TRACK_STATE_RIGHT_ANGLE:", 1
+        )[0]
+        self.assertNotIn("invalid_line_confirm", line_follow)
+        self.assertNotIn("Track.target_speed = 0", line_follow)
+        self.assertNotIn("Track.base_speed = 0", line_follow)
         self.assertLess(
             stop.index("Safety_TransitionToFinished();"),
             stop.index("Safety_TransitionToReady();"),

@@ -145,13 +145,6 @@
 #ifndef USER_GRAYSCALE_MIN_CAL_CONTRAST
 #define USER_GRAYSCALE_MIN_CAL_CONTRAST 200u /* 每路黑白ADC最小有效差值 */
 #endif
-#ifndef USER_TRACK_INVALID_HOLD_FRAMES
-#define USER_TRACK_INVALID_HOLD_FRAMES 1u
-#endif
-#ifndef USER_TRACK_INVALID_STOP_FRAMES
-#define USER_TRACK_INVALID_STOP_FRAMES 3u
-#endif
-
 /* ==================================================================
  * ====== 4. 丢线/直角弯参数 ======
  * 调参方法:

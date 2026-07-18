@@ -732,6 +732,7 @@ static void Track_Handle_RightAngle(track_line_observation_t observation)
                                  (turned_abs >= TRACK_RIGHT_ANGLE_HYBRID_HANDOFF_DEG
                                   ? "angle" : "settled");
             Track.corner_phase = TRACK_CORNER_CAPTURE;
+            Track.corner_started_at = now;
             Track.state_timer = now;
             Track.capture_confirm = 0u;
             APP_TRACK_LOG_I("TRACK", "CORNER_CAPTURE reason=%s mask=0x%02X enc_d=%ld,%ld target=%d actual=%d err=%d turn=%d rate=%d",
@@ -784,6 +785,7 @@ static void Track_Handle_RightAngle(track_line_observation_t observation)
     if (Track.corner_phase == TRACK_CORNER_CAPTURE) {
         Track.capture_confirm = Track_UpdateConfirmFrames(
             Track.capture_confirm,
+            turned_abs >= TRACK_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG &&
             Track_CaptureLineValid(observation, 1.0f));
     }
     if (Track.corner_phase == TRACK_CORNER_CAPTURE &&
@@ -815,29 +817,27 @@ static void Track_Handle_RightAngle(track_line_observation_t observation)
     if (Track_Timeout_Reached(now, Track.corner_started_at,
                               TRACK_RIGHT_ANGLE_TIMEOUT)) {
         if (Track.corner_phase == TRACK_CORNER_PIVOT) {
-            Track.corner_phase = TRACK_CORNER_CAPTURE;
             Track.corner_started_at = now;
             Track.state_timer = now;
             Track.corner_heading_settle_confirm = 0;
             Track.capture_confirm = 0;
-            APP_TRACK_LOG_W("TRACK", "CORNER_RECOVER pivot_timeout -> capture mask=0x%02X target=%d actual=%d err=%d rate=%d",
+            APP_TRACK_LOG_W("TRACK", "CORNER_RETRY pivot_timeout keep_pivot mask=0x%02X target=%d actual=%d err=%d turn=%d rate=%d",
                             Track.line_mask, (int)Track.right_angle_target,
                             (int)Imu_Sensor.heading, (int)angle_error,
+                            (int)turned_abs,
                             (int)Imu_Sensor.gyro_z);
             return;
         }
-        Track.state = TRACK_STATE_FINISHED;
-        Track_Motor_Stop_Immediate();
-        Safety_TransitionToFinished();
-        Track.right_angle_confirm = 0;
-        Track.corner_heading_settle_confirm = 0;
+        Track.corner_started_at = now;
+        Track.state_timer = now;
         Track.capture_confirm = 0;
-        APP_TRACK_LOG_W("TRACK", "CORNER_FAIL reason=timeout phase=%d mask=0x%02X enc_d=%ld,%ld target=%d actual=%d err=%d rate=%d ra=%d",
-                        Track.corner_phase, Track.line_mask,
+        APP_TRACK_LOG_W("TRACK", "CORNER_RETRY capture_timeout keep_capture mask=0x%02X enc_d=%ld,%ld target=%d actual=%d err=%d turn=%d rate=%d ra=%d",
+                        Track.line_mask,
                         (long)left_delta, (long)right_delta,
                         (int)Track.right_angle_target,
                         (int)Imu_Sensor.heading, (int)angle_error,
-                        (int)Imu_Sensor.gyro_z, Track.right_angle_count);
+                        (int)turned_abs, (int)Imu_Sensor.gyro_z,
+                        Track.right_angle_count);
     }
 }
 
@@ -1121,18 +1121,14 @@ void Track_Update(void)
          * 极性: 实测左转 gyro_z>0，而左转差速输出<0，因此阻尼项取正号
          * 效果: 直行稳(抖动被阻尼), 弯道灵(角速度小阻尼小不影响跟踪)
          * IMU 失效时由本节拍入口立即停车，禁止使用陈旧航向。 */
-        if (Track.invalid_line_confirm > TRACK_INVALID_HOLD_FRAMES) {
-            Track.target_speed = 0;
-            Track.base_speed = 0;
-            Track.turn_output = 0.0f;
-        } else {
-            float line_turn = Pid_Compute(&Track.line_pid, Track.error, 0.0f);
-            float damping = (Track.use_gyro && Track_Imu_Healthy())
-                          ? Track.gyro_damp : 0.0f;
-            Track.turn_output = Track_ClampTurn(
-                Track_LineTurn_WithGyroDamping(
-                    line_turn, Track.gyro_rate, damping),
-                TRACK_RIGHT_ANGLE_TURN_LIMIT);
+        {
+        float line_turn = Pid_Compute(&Track.line_pid, Track.error, 0.0f);
+        float damping = (Track.use_gyro && Track_Imu_Healthy())
+                      ? Track.gyro_damp : 0.0f;
+        Track.turn_output = Track_ClampTurn(
+            Track_LineTurn_WithGyroDamping(
+                line_turn, Track.gyro_rate, damping),
+            TRACK_RIGHT_ANGLE_TURN_LIMIT);
         }
         break;
 
