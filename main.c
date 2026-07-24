@@ -334,9 +334,9 @@ static void Diag_PINCM(void)
 
 }
 
-static void SelfTest_ICM42688(void)
+static void SelfTest_IMU660RB(void)
 {
-    elog_i("TEST", "==== ICM42688-P Test ====");
+    elog_i("TEST", "==== IMU660RB Test ====");
     (void)App_Imu_Init();
     Bsp_Delay_ms(100);
 
@@ -345,11 +345,11 @@ static void SelfTest_ICM42688(void)
                Imu_Sensor.accel_x, Imu_Sensor.accel_y, Imu_Sensor.accel_z);
         elog_i("TEST", "ICM OK: gx=%.2f gy=%.2f gz=%.2f",
                Imu_Sensor.gyro_x, Imu_Sensor.gyro_y, Imu_Sensor.gyro_z);
-        elog_i("TEST", "ICM OK: temp=%.1fC", Imu_Sensor.temp);
+        elog_i("TEST", "IMU660RB OK: temp=%.1fC", Imu_Sensor.temp);
     } else {
         elog_e("TEST", "ICM FAIL: init/read error");
     }
-    elog_i("TEST", "==== ICM42688-P Done ====");
+    elog_i("TEST", "==== IMU660RB Done ====");
 }
 
 static void SelfTest_Motor_Encoder(void)
@@ -511,7 +511,7 @@ static void Run_SelfTest(void)
     Diag_PINCM();
     Bsp_Delay_ms(100);
 
-    SelfTest_ICM42688();
+    SelfTest_IMU660RB();
     Bsp_Delay_ms(200);
 
     SelfTest_PathFish();

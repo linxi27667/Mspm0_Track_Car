@@ -185,23 +185,23 @@ extern "C" {
 
 
 
-/* Defines for ICM_SPI */
-#define ICM_SPI_INST                                                       SPI1
-#define ICM_SPI_INST_IRQHandler                                 SPI1_IRQHandler
-#define ICM_SPI_INST_INT_IRQN                                     SPI1_INT_IRQn
-#define GPIO_ICM_SPI_PICO_PORT                                            GPIOB
-#define GPIO_ICM_SPI_PICO_PIN                                     DL_GPIO_PIN_8
-#define GPIO_ICM_SPI_IOMUX_PICO                                 (IOMUX_PINCM25)
-#define GPIO_ICM_SPI_IOMUX_PICO_FUNC                 IOMUX_PINCM25_PF_SPI1_PICO
-#define GPIO_ICM_SPI_POCI_PORT                                            GPIOB
-#define GPIO_ICM_SPI_POCI_PIN                                     DL_GPIO_PIN_7
-#define GPIO_ICM_SPI_IOMUX_POCI                                 (IOMUX_PINCM24)
-#define GPIO_ICM_SPI_IOMUX_POCI_FUNC                 IOMUX_PINCM24_PF_SPI1_POCI
-/* GPIO configuration for ICM_SPI */
-#define GPIO_ICM_SPI_SCLK_PORT                                            GPIOB
-#define GPIO_ICM_SPI_SCLK_PIN                                     DL_GPIO_PIN_9
-#define GPIO_ICM_SPI_IOMUX_SCLK                                 (IOMUX_PINCM26)
-#define GPIO_ICM_SPI_IOMUX_SCLK_FUNC                 IOMUX_PINCM26_PF_SPI1_SCLK
+/* Defines for IMU_SPI */
+#define IMU_SPI_INST                                                       SPI1
+#define IMU_SPI_INST_IRQHandler                                 SPI1_IRQHandler
+#define IMU_SPI_INST_INT_IRQN                                     SPI1_INT_IRQn
+#define GPIO_IMU_SPI_PICO_PORT                                            GPIOB
+#define GPIO_IMU_SPI_PICO_PIN                                     DL_GPIO_PIN_8
+#define GPIO_IMU_SPI_IOMUX_PICO                                 (IOMUX_PINCM25)
+#define GPIO_IMU_SPI_IOMUX_PICO_FUNC                 IOMUX_PINCM25_PF_SPI1_PICO
+#define GPIO_IMU_SPI_POCI_PORT                                            GPIOB
+#define GPIO_IMU_SPI_POCI_PIN                                     DL_GPIO_PIN_7
+#define GPIO_IMU_SPI_IOMUX_POCI                                 (IOMUX_PINCM24)
+#define GPIO_IMU_SPI_IOMUX_POCI_FUNC                 IOMUX_PINCM24_PF_SPI1_POCI
+/* GPIO configuration for IMU_SPI */
+#define GPIO_IMU_SPI_SCLK_PORT                                            GPIOB
+#define GPIO_IMU_SPI_SCLK_PIN                                     DL_GPIO_PIN_9
+#define GPIO_IMU_SPI_IOMUX_SCLK                                 (IOMUX_PINCM26)
+#define GPIO_IMU_SPI_IOMUX_SCLK_FUNC                 IOMUX_PINCM26_PF_SPI1_SCLK
 
 
 
@@ -235,12 +235,12 @@ extern "C" {
 /* Defines for KEY4: GPIOA.30 with pinCMx 5 on package pin 37 */
 #define Key_PA30_KEY4_PIN                                       (DL_GPIO_PIN_30)
 #define Key_PA30_KEY4_IOMUX                                       (IOMUX_PINCM5)
-/* Port definition for Pin Group ICM_CS */
-#define ICM_CS_PORT                                                      (GPIOB)
+/* Port definition for Pin Group IMU_CS */
+#define IMU_CS_PORT                                                      (GPIOB)
 
 /* Defines for CS: GPIOB.6 with pinCMx 23 on package pin 58 */
-#define ICM_CS_CS_PIN                                            (DL_GPIO_PIN_6)
-#define ICM_CS_CS_IOMUX                                          (IOMUX_PINCM23)
+#define IMU_CS_CS_PIN                                            (DL_GPIO_PIN_6)
+#define IMU_CS_CS_IOMUX                                          (IOMUX_PINCM23)
 /* Port definition for Pin Group Key_Group */
 #define Key_Group_PORT                                                   (GPIOB)
 
@@ -302,7 +302,7 @@ void SYSCFG_DL_PATH_FISH_I2C_init(void);
 void SYSCFG_DL_OLED_I2C_init(void);
 void SYSCFG_DL_UART_Debug_init(void);
 void SYSCFG_DL_UART_ESP01S_init(void);
-void SYSCFG_DL_ICM_SPI_init(void);
+void SYSCFG_DL_IMU_SPI_init(void);
 void SYSCFG_DL_DMA_init(void);
 
 

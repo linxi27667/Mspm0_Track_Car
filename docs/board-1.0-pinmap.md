@@ -12,7 +12,7 @@
 | 右编码器 | PB12 / PB13 | 上拉输入，GPIOB 双边沿中断 |
 | 鱼眼循迹 SDA/SCL | PA0 / PA1，I²C0 | 地址 `0x48`，400 kHz，模块侧 5 V 上拉 |
 | OLED SDA/SCL | PA18 / PA17，I²C1 | 地址 `0x3C`，400 kHz，3.3 V 上拉 |
-| ICM42688 CS/MISO/MOSI/SCLK | PB6 / PB7 / PB8 / PB9 | SPI1，禁止被软件 I²C 改写 |
+| IMU660RB CS/MISO/MOSI/SCLK | PB6 / PB7 / PB8 / PB9 | SPI1 Mode 0，禁止被软件 I²C 改写 |
 | ESP-01S TX/RX | PA8 / PA9 | UART1 + DMA |
 | 调试串口 TX/RX | PA10 / PA11 | UART0 + DMA，SysConfig 已锁定 |
 | SWDIO / SWCLK | 专用 DIO / CLK | J-Link 接口未接 RESET |
@@ -43,7 +43,7 @@ K3 长按的旧电机比例标定本身仍是约 1.3 s 的维护模式阻塞流�
 - OLED 缺失、NACK 或 I²C1 故障只会禁用显示并记日志，不参与运动安全判定。
 - 鱼眼使用独立 I²C0：PA0=SDA、PA1=SCL、`0x48`；每 5 ms 非阻塞读取一个 7 字节半帧，约每 10 ms发布一次完整 12 路快照。
 - 鱼眼板载标定：长按板载 K1 进入采集，短按板载 K1 采白底，短按板载 K2 采黑线。
-- 禁止把 OLED 绑定到 PB8/PB9：这两脚属于 ICM42688 SPI1。
+- 禁止把 OLED 绑定到 PB8/PB9：这两脚属于 IMU660RB SPI1。
 
 ## 网表待复核项
 

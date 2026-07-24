@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 
-#include "BSP/Inc/bsp_icm42688.h"
+#include "BSP/Inc/bsp_imu660rb.h"
 
 static inline bool Imu_Health_AllowsMotion(bool initialized,
                                            bool data_valid,

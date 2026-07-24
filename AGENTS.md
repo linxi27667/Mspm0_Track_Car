@@ -5,7 +5,7 @@
 - MCU: TI MSPM0G3507
 - Runtime: bare metal / noRTOS
 - Toolchains: Keil MDK-ARM (primary), TI Clang and GCC project files also exist
-- Vehicle: eight-channel grayscale line sensor, dual encoder motors, ICM42688-P, ESP-01S using AT firmware
+- Vehicle: eight-channel grayscale line sensor, dual encoder motors, SeekFree IMU660RB (LSM6DSRTR), ESP-01S using AT firmware
 - Host: Python Flask + Flask-SocketIO web application
 
 ## Architecture

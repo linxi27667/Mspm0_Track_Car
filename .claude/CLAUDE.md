@@ -5,7 +5,7 @@
 - MCU: TI MSPM0G3507
 - Runtime: bare metal / noRTOS
 - Toolchains: Keil MDK-ARM (primary), TI Clang and GCC project files also exist
-- Vehicle: eight-channel grayscale line sensor, dual encoder motors, ICM42688-P, ESP-01S using AT firmware
+- Vehicle: eight-channel grayscale line sensor, dual encoder motors, SeekFree IMU660RB (LSM6DSRTR), ESP-01S using AT firmware
 - Host: Python Flask + Flask-SocketIO web application
 
 ## Architecture
@@ -59,9 +59,16 @@ python host\simulator.py
 ## Remote Gyro Rotation
 
 - TC1 `cmd:"rotate"` takes a signed nonzero `deg` in the inclusive range `-180..180`: positive is left/counter-clockwise and negative is right/clockwise.
-- Rotation is accepted only from Safety READY with tracking idle and a calibrated, fresh ICM42688-P frame. The 5 ms rotation state closes on relative yaw, slows near target, corrects overshoot, and returns to READY after three settled frames.
-- A failed ICM42688-P read invalidates the current sample and stops rotation. Encoder fault, safety revocation, stop command, and angle timeout also cut motion. Host disconnect or missing heartbeat must not cut motion.
+- Rotation is accepted only from Safety READY with tracking idle and a calibrated, fresh IMU660RB frame. The 5 ms rotation state closes on relative yaw, slows near target, corrects overshoot, and returns to READY after three settled frames.
+- A failed IMU660RB read invalidates the current sample and stops rotation. Encoder fault, safety revocation, stop command, and angle timeout also cut motion. Host disconnect or missing heartbeat must not cut motion.
 - Host UI exposes ±90 degree buttons and a custom signed angle. Telemetry rotation fields are `tg`, `ta`, `te`, `rr`; the shared TC1 JSON ceiling is 384 bytes.
+
+## IMU660RB
+
+- The SeekFree IMU660RB is based on ST LSM6DSRTR and remains on SPI1: PB6 CS, PB7 MISO, PB8 MOSI, PB9 SCLK.
+- SPI uses Mode 0 at 8 MHz. Firmware verifies `WHO_AM_I=0x6B`, enables register auto-increment and block-data-update, and reads temperature, gyro and accelerometer as one 14-byte little-endian burst from `0x20`.
+- Accelerometer and gyroscope run at 416 Hz with ±4 g and ±500 dps ranges. This keeps fresh samples available to the non-blocking 5 ms control loop.
+- Flat `0x00`/`0xFF` frames and transport failures invalidate the sample immediately. Before motor-enabled rotation, bench-check that positive Z yaw still corresponds to the project's positive left/counter-clockwise convention; adjust `IMU660RB_GYRO_Z_SIGN` only if the mounted module reports the opposite sign.
 
 ## First Track Test Profile
 
@@ -79,8 +86,8 @@ python host\simulator.py
 
 ## Board 1.0 I/O Map
 
-- The 2026-07-18 board netlist keeps both motors, both quadrature encoders, the eight-channel grayscale multiplexer, ICM42688 SPI1, ESP-01S UART1, debug UART0, and four active-low keys on their existing pins.
+- The 2026-07-18 board netlist keeps both motors, both quadrature encoders, the eight-channel grayscale multiplexer, IMU660RB SPI1, ESP-01S UART1, debug UART0, and four active-low keys on their existing pins.
 - PB4 is the only MCU-controlled status LED and is active high. PB5 is no longer LED2; it drives the buzzer transistor and is active high. K1/K2/K3/K4 remain PB15/PB16/PB2/PA30 with pull-ups.
 - Key feedback is non-blocking: ordinary debounced key events request one 60 ms beep; K3/K4 calibration actions and K3 long motor-scale calibration request two beeps separated by 60 ms.
-- OLED support is an unbound SSD1306-compatible 128x64 transport abstraction. It must not use the legacy PB8/PB9 software-I2C binding because those pins are ICM42688 MOSI/SCLK. Do not call `App_Oled_Init()` until a new bus is attached.
+- OLED support is an unbound SSD1306-compatible 128x64 transport abstraction. It must not use the legacy PB8/PB9 software-I2C binding because those pins are IMU660RB MOSI/SCLK. Do not call `App_Oled_Init()` until a new bus is attached.
 - See `docs/board-1.0-pinmap.md` for the full functional map, netlist caveats, and the unresolved active-versus-passive buzzer check.

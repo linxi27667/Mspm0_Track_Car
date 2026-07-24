@@ -48,7 +48,7 @@
 #define APP_LOG_VEHICLE_ENABLE            1  /* 仅运动时输出车辆/电机/编码器周期状态 */
 #define APP_LOG_TRACK_ENABLE              1  /* 循迹状态、校准、丢线、直角和十字 */
 #define APP_LOG_TUNING_ENABLE             1  /* 认证、命令、参数与协议诊断 */
-#define APP_LOG_IMU_ENABLE                1  /* ICM42688 初始化与静止校准，不周期刷运行数据 */
+#define APP_LOG_IMU_ENABLE                1  /* IMU660RB 初始化与静止校准，不周期刷运行数据 */
 #define APP_LOG_DIAGNOSTIC_ENABLE         1  /* 手动自检、比例标定、IOMUX、GPIO 等诊断 */
 
 /* 循迹、PID、速度和远程参数仍集中于此文件，供上位机一致性测试读取。 */

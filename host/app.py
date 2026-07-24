@@ -106,7 +106,7 @@ car_log_buffer = deque(maxlen=500)
 
 REQUEST_ERROR_MESSAGES = {
     "not_ready": "当前已有循迹或其他控制任务在运行，请先停止后再旋转",
-    "imu_unavailable": "ICM42688 未连接、未识别或尚未完成静止校准",
+    "imu_unavailable": "IMU660RB 未连接、未识别或尚未完成静止校准",
     "safety_rejected": "安全状态机拒绝执行，请检查故障状态和心跳",
     "invalid_angle": "角度无效，范围为 -180 到 180 且不能为 0",
     "lifted_confirmation_required": "电机测试必须明确确认驱动轮已经架空",

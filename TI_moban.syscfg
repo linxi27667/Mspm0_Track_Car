@@ -87,7 +87,7 @@ GPIO9.associatedPins[1].internalResistor = "PULL_UP";
 GPIO9.associatedPins[1].interruptEn      = true;
 GPIO9.associatedPins[1].polarity         = "RISE_FALL";
 
-GPIO10.$name                         = "ICM_CS";
+GPIO10.$name                         = "IMU_CS";
 GPIO10.port                          = "PORTB";
 GPIO10.associatedPins[0].$name       = "CS";
 GPIO10.associatedPins[0].assignedPin = "6";
@@ -167,10 +167,10 @@ PWM3.PWM_CHANNEL_1.$name                = "Motor_Right_BIN2_PWM";
 PWM3.PWM_CHANNEL_1.dutyCycle            = 0;
 PWM3.ccp1PinConfig.$name                = "Motor_Right_BIN2_Pin";
 
-SPI1.$name                      = "ICM_SPI";
-SPI1.targetBitRate              = 1000000;
-SPI1.polarity                   = "1";
-SPI1.phase                      = "1";
+SPI1.$name                      = "IMU_SPI";
+SPI1.targetBitRate              = 8000000;
+SPI1.polarity                   = "0";
+SPI1.phase                      = "0";
 SPI1.dataSize                   = 8;
 SPI1.chipSelect                 = [];
 SPI1.frameFormat                = "MOTO3";

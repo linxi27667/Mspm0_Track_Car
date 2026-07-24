@@ -954,8 +954,8 @@
       <tvExp>0</tvExp>
       <tvExpOptDlg>0</tvExpOptDlg>
       <bDave2>0</bDave2>
-      <PathWithFileName>..\BSP\Src\bsp_icm42688.c</PathWithFileName>
-      <FilenameWithoutPath>bsp_icm42688.c</FilenameWithoutPath>
+      <PathWithFileName>..\BSP\Src\bsp_imu660rb.c</PathWithFileName>
+      <FilenameWithoutPath>bsp_imu660rb.c</FilenameWithoutPath>
       <RteFlg>0</RteFlg>
       <bShared>0</bShared>
     </File>
@@ -966,8 +966,8 @@
       <tvExp>0</tvExp>
       <tvExpOptDlg>0</tvExpOptDlg>
       <bDave2>0</bDave2>
-      <PathWithFileName>..\BSP\Inc\bsp_icm42688.h</PathWithFileName>
-      <FilenameWithoutPath>bsp_icm42688.h</FilenameWithoutPath>
+      <PathWithFileName>..\BSP\Inc\bsp_imu660rb.h</PathWithFileName>
+      <FilenameWithoutPath>bsp_imu660rb.h</FilenameWithoutPath>
       <RteFlg>0</RteFlg>
       <bShared>0</bShared>
     </File>

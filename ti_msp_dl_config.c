@@ -43,7 +43,7 @@
 DL_TimerA_backupConfig gMotor_Left_TimerBackup;
 DL_TimerA_backupConfig gMotor_Right_BIN1_TimerBackup;
 DL_TimerG_backupConfig gMotor_Right_BIN2_TimerBackup;
-DL_SPI_backupConfig gICM_SPIBackup;
+DL_SPI_backupConfig gIMU_SPIBackup;
 
 /*
  *  ======== SYSCFG_DL_init ========
@@ -62,14 +62,14 @@ SYSCONFIG_WEAK void SYSCFG_DL_init(void)
     SYSCFG_DL_OLED_I2C_init();
     SYSCFG_DL_UART_Debug_init();
     SYSCFG_DL_UART_ESP01S_init();
-    SYSCFG_DL_ICM_SPI_init();
+    SYSCFG_DL_IMU_SPI_init();
     SYSCFG_DL_DMA_init();
     /* Ensure backup structures have no valid state */
 	gMotor_Left_TimerBackup.backupRdy 	= false;
 	gMotor_Right_BIN1_TimerBackup.backupRdy 	= false;
 	gMotor_Right_BIN2_TimerBackup.backupRdy 	= false;
 
-	gICM_SPIBackup.backupRdy 	= false;
+	gIMU_SPIBackup.backupRdy 	= false;
 
 }
 /*
@@ -83,7 +83,7 @@ SYSCONFIG_WEAK bool SYSCFG_DL_saveConfiguration(void)
 	retStatus &= DL_TimerA_saveConfiguration(Motor_Left_Timer_INST, &gMotor_Left_TimerBackup);
 	retStatus &= DL_TimerA_saveConfiguration(Motor_Right_BIN1_Timer_INST, &gMotor_Right_BIN1_TimerBackup);
 	retStatus &= DL_TimerG_saveConfiguration(Motor_Right_BIN2_Timer_INST, &gMotor_Right_BIN2_TimerBackup);
-	retStatus &= DL_SPI_saveConfiguration(ICM_SPI_INST, &gICM_SPIBackup);
+	retStatus &= DL_SPI_saveConfiguration(IMU_SPI_INST, &gIMU_SPIBackup);
 
     return retStatus;
 }
@@ -96,7 +96,7 @@ SYSCONFIG_WEAK bool SYSCFG_DL_restoreConfiguration(void)
 	retStatus &= DL_TimerA_restoreConfiguration(Motor_Left_Timer_INST, &gMotor_Left_TimerBackup, false);
 	retStatus &= DL_TimerA_restoreConfiguration(Motor_Right_BIN1_Timer_INST, &gMotor_Right_BIN1_TimerBackup, false);
 	retStatus &= DL_TimerG_restoreConfiguration(Motor_Right_BIN2_Timer_INST, &gMotor_Right_BIN2_TimerBackup, false);
-	retStatus &= DL_SPI_restoreConfiguration(ICM_SPI_INST, &gICM_SPIBackup);
+	retStatus &= DL_SPI_restoreConfiguration(IMU_SPI_INST, &gIMU_SPIBackup);
 
     return retStatus;
 }
@@ -112,7 +112,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_initPower(void)
     DL_I2C_reset(OLED_I2C_INST);
     DL_UART_Main_reset(UART_Debug_INST);
     DL_UART_Main_reset(UART_ESP01S_INST);
-    DL_SPI_reset(ICM_SPI_INST);
+    DL_SPI_reset(IMU_SPI_INST);
 
 
     DL_GPIO_enablePower(GPIOA);
@@ -124,7 +124,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_initPower(void)
     DL_I2C_enablePower(OLED_I2C_INST);
     DL_UART_Main_enablePower(UART_Debug_INST);
     DL_UART_Main_enablePower(UART_ESP01S_INST);
-    DL_SPI_enablePower(ICM_SPI_INST);
+    DL_SPI_enablePower(IMU_SPI_INST);
 
     delay_cycles(POWER_STARTUP_DELAY);
 }
@@ -175,11 +175,11 @@ SYSCONFIG_WEAK void SYSCFG_DL_GPIO_init(void)
 		 DL_GPIO_HYSTERESIS_DISABLE, DL_GPIO_WAKEUP_DISABLE);
 
     DL_GPIO_initPeripheralOutputFunction(
-        GPIO_ICM_SPI_IOMUX_SCLK, GPIO_ICM_SPI_IOMUX_SCLK_FUNC);
+        GPIO_IMU_SPI_IOMUX_SCLK, GPIO_IMU_SPI_IOMUX_SCLK_FUNC);
     DL_GPIO_initPeripheralOutputFunction(
-        GPIO_ICM_SPI_IOMUX_PICO, GPIO_ICM_SPI_IOMUX_PICO_FUNC);
+        GPIO_IMU_SPI_IOMUX_PICO, GPIO_IMU_SPI_IOMUX_PICO_FUNC);
     DL_GPIO_initPeripheralInputFunction(
-        GPIO_ICM_SPI_IOMUX_POCI, GPIO_ICM_SPI_IOMUX_POCI_FUNC);
+        GPIO_IMU_SPI_IOMUX_POCI, GPIO_IMU_SPI_IOMUX_POCI_FUNC);
 
     DL_GPIO_initDigitalOutput(GPIO_GRP_1_PIN_1_IOMUX);
 
@@ -187,7 +187,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_GPIO_init(void)
 		 DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_PULL_UP,
 		 DL_GPIO_HYSTERESIS_DISABLE, DL_GPIO_WAKEUP_DISABLE);
 
-    DL_GPIO_initDigitalOutput(ICM_CS_CS_IOMUX);
+    DL_GPIO_initDigitalOutput(IMU_CS_CS_IOMUX);
 
     DL_GPIO_initDigitalInputFeatures(Key_Group_KEY1_IOMUX,
 		 DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_PULL_UP,
@@ -223,10 +223,10 @@ SYSCONFIG_WEAK void SYSCFG_DL_GPIO_init(void)
 
     DL_GPIO_clearPins(GPIOB, GPIO_GRP_1_PIN_1_PIN |
 		Board_Output_STATUS_LED_PIN);
-    DL_GPIO_setPins(GPIOB, ICM_CS_CS_PIN |
+    DL_GPIO_setPins(GPIOB, IMU_CS_CS_PIN |
 		Board_Output_BUZZER_PIN);
     DL_GPIO_enableOutput(GPIOB, GPIO_GRP_1_PIN_1_PIN |
-		ICM_CS_CS_PIN |
+		IMU_CS_CS_PIN |
 		Board_Output_STATUS_LED_PIN |
 		Board_Output_BUZZER_PIN);
     DL_GPIO_setLowerPinsPolarity(GPIOB, DL_GPIO_PIN_12_EDGE_RISE_FALL |
@@ -532,36 +532,36 @@ SYSCONFIG_WEAK void SYSCFG_DL_UART_ESP01S_init(void)
     DL_UART_Main_enable(UART_ESP01S_INST);
 }
 
-static const DL_SPI_Config gICM_SPI_config = {
+static const DL_SPI_Config gIMU_SPI_config = {
     .mode        = DL_SPI_MODE_CONTROLLER,
-    .frameFormat = DL_SPI_FRAME_FORMAT_MOTO3_POL1_PHA1,
+    .frameFormat = DL_SPI_FRAME_FORMAT_MOTO3_POL0_PHA0,
     .parity      = DL_SPI_PARITY_NONE,
     .dataSize    = DL_SPI_DATA_SIZE_8,
     .bitOrder    = DL_SPI_BIT_ORDER_MSB_FIRST,
 };
 
-static const DL_SPI_ClockConfig gICM_SPI_clockConfig = {
+static const DL_SPI_ClockConfig gIMU_SPI_clockConfig = {
     .clockSel    = DL_SPI_CLOCK_BUSCLK,
     .divideRatio = DL_SPI_CLOCK_DIVIDE_RATIO_1
 };
 
-SYSCONFIG_WEAK void SYSCFG_DL_ICM_SPI_init(void) {
-    DL_SPI_setClockConfig(ICM_SPI_INST, (DL_SPI_ClockConfig *) &gICM_SPI_clockConfig);
+SYSCONFIG_WEAK void SYSCFG_DL_IMU_SPI_init(void) {
+    DL_SPI_setClockConfig(IMU_SPI_INST, (DL_SPI_ClockConfig *) &gIMU_SPI_clockConfig);
 
-    DL_SPI_init(ICM_SPI_INST, (DL_SPI_Config *) &gICM_SPI_config);
+    DL_SPI_init(IMU_SPI_INST, (DL_SPI_Config *) &gIMU_SPI_config);
 
     /* Configure Controller mode */
     /*
      * Set the bit rate clock divider to generate the serial output clock
      *     outputBitRate = (spiInputClock) / ((1 + SCR) * 2)
-     *     1000000 = (32000000)/((1 + 15) * 2)
+     *     8000000 = (32000000)/((1 + 1) * 2)
      */
-    DL_SPI_setBitRateSerialClockDivider(ICM_SPI_INST, 15);
+    DL_SPI_setBitRateSerialClockDivider(IMU_SPI_INST, 1);
     /* Set RX and TX FIFO threshold levels */
-    DL_SPI_setFIFOThreshold(ICM_SPI_INST, DL_SPI_RX_FIFO_LEVEL_1_2_FULL, DL_SPI_TX_FIFO_LEVEL_1_2_EMPTY);
+    DL_SPI_setFIFOThreshold(IMU_SPI_INST, DL_SPI_RX_FIFO_LEVEL_1_2_FULL, DL_SPI_TX_FIFO_LEVEL_1_2_EMPTY);
 
     /* Enable module */
-    DL_SPI_enable(ICM_SPI_INST);
+    DL_SPI_enable(IMU_SPI_INST);
 }
 
 static const DL_DMA_Config gDMA_CH0Config = {

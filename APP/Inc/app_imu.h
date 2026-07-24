@@ -1,6 +1,6 @@
 /**
  * @file    app_imu.h
- * @brief   ICM42688-P hardware binding and non-blocking IMU services.
+ * @brief   IMU660RB hardware binding and non-blocking IMU services.
  */
 #ifndef APP_IMU_H
 #define APP_IMU_H
@@ -8,7 +8,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "bsp_icm42688.h"
+#include "bsp_imu660rb.h"
 
 extern imu_sensor_t Imu_Sensor;
 

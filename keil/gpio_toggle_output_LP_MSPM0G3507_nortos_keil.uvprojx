@@ -700,14 +700,14 @@
               <FilePath>..\BSP\Inc\bsp_oled_font.h</FilePath>
             </File>
             <File>
-              <FileName>bsp_icm42688.c</FileName>
+              <FileName>bsp_imu660rb.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\BSP\Src\bsp_icm42688.c</FilePath>
+              <FilePath>..\BSP\Src\bsp_imu660rb.c</FilePath>
             </File>
             <File>
-              <FileName>bsp_icm42688.h</FileName>
+              <FileName>bsp_imu660rb.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\BSP\Inc\bsp_icm42688.h</FilePath>
+              <FilePath>..\BSP\Inc\bsp_imu660rb.h</FilePath>
             </File>
             <File>
               <FileName>bsp_esp_at.c</FileName>
