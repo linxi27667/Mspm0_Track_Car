@@ -28,10 +28,11 @@ static void Gray_Select_Channel(bsp_grayscale_t *gs, uint8_t ch)
  * 正常极性: ADC > mid+hyst → 白;  ADC < mid-hyst → 黑
  * 反向极性: ADC > mid+hyst → 黑;  ADC < mid-hyst → 白
  *
- * ADC异常保护: 当ADC远低于black/white基准时(传感器抬起/悬空),
- * 认为传感器异常,保持上一状态,防止冲出赛道时全黑误判导致直行跑飞。 */
+ * 0~4095内的低ADC可能是真实深黑，不能用幅值猜测硬件故障；ADC读取
+ * 超时由BSP_GRAY_ADC_INVALID/frame_fault单独上报。 */
 static void Gray_Hysteresis(bsp_grayscale_t *gs, uint8_t ch)
 {
+    uint16_t sample = gs->scan_analog[ch];
     uint16_t b = gs->black[ch];
     uint16_t w = gs->white[ch];
     uint16_t mid  = (b + w) / 2;
@@ -39,25 +40,19 @@ static void Gray_Hysteresis(bsp_grayscale_t *gs, uint8_t ch)
     uint16_t high = mid + hyst;
     uint16_t low  = mid - hyst;
 
-    /* ADC异常保护: ADC低于基准一半时,传感器可能抬起/悬空,保持上一状态 */
-    uint16_t min_base = (b < w) ? b : w;
-    if (gs->analog[ch] < (uint16_t)(min_base / 2)) {
-        return;  /* 传感器异常,保持上一状态 */
-    }
-
     if (w >= b) {
         /* 正常极性: 黑线ADC低, 白地ADC高 */
-        if (gs->analog[ch] > high) {
-            gs->digital[ch] = 0;    /* 白色 */
-        } else if (gs->analog[ch] < low) {
-            gs->digital[ch] = 1;    /* 黑色 */
+        if (sample > high) {
+            gs->scan_digital[ch] = 0;    /* 白色 */
+        } else if (sample < low) {
+            gs->scan_digital[ch] = 1;    /* 黑色 */
         }
     } else {
         /* 反向极性: 黑线ADC高, 白地ADC低 */
-        if (gs->analog[ch] > high) {
-            gs->digital[ch] = 1;    /* 黑色 */
-        } else if (gs->analog[ch] < low) {
-            gs->digital[ch] = 0;    /* 白色 */
+        if (sample > high) {
+            gs->scan_digital[ch] = 1;    /* 黑色 */
+        } else if (sample < low) {
+            gs->scan_digital[ch] = 0;    /* 白色 */
         }
     }
     /* low ≤ analog ≤ high → 保持上一状态（惯性抗抖动） */
@@ -69,9 +64,11 @@ static void Gray_Hysteresis(bsp_grayscale_t *gs, uint8_t ch)
  * 反向极性: black>white, ADC越低越白 */
 static void Gray_Normalize(bsp_grayscale_t *gs, uint8_t ch)
 {
+    uint16_t sample = gs->scan_analog[ch];
+
     if (!gs->calibrated) {
         /* 未校准：简单线性映射 (ADC越大→越白→norm越小) */
-        gs->norm[ch] = 1.0f - (float)gs->analog[ch] / (float)BSP_GRAY_ADC_MAX;
+        gs->scan_norm[ch] = 1.0f - (float)sample / (float)BSP_GRAY_ADC_MAX;
         return;
     }
 
@@ -84,26 +81,32 @@ static void Gray_Normalize(bsp_grayscale_t *gs, uint8_t ch)
     int32_t val;
     if (w >= b) {
         /* 正常极性: norm=0 → 白(高ADC), norm=1 → 黑(低ADC) */
-        val = (int32_t)gs->analog[ch] - b;
+        val = (int32_t)sample - b;
         if (val < 0) val = 0;
         if (val > range) val = range;
-        gs->norm[ch] = 1.0f - (float)val / (float)range;
+        gs->scan_norm[ch] = 1.0f - (float)val / (float)range;
     } else {
         /* 反向极性: norm=0 → 白(低ADC), norm=1 → 黑(高ADC) */
-        val = (int32_t)b - (int32_t)gs->analog[ch];
+        val = (int32_t)b - (int32_t)sample;
         if (val < 0) val = 0;
         if (val > range) val = range;
-        gs->norm[ch] = 1.0f - (float)val / (float)range;
+        gs->scan_norm[ch] = 1.0f - (float)val / (float)range;
     }
 }
 
-/* 统计黑色通道数 */
-static void Gray_Count_Black(bsp_grayscale_t *gs)
+/* 原子发布一轮完整扫描；主循环只读取发布快照。 */
+static void Gray_Publish_Frame(bsp_grayscale_t *gs)
 {
     gs->black_count = 0;
     for (uint8_t i = 0; i < BSP_GRAY_CHANNEL_NUM; i++) {
+        gs->analog[i] = gs->scan_analog[i];
+        gs->norm[i] = gs->scan_norm[i];
+        gs->digital[i] = gs->scan_digital[i];
         if (gs->digital[i]) gs->black_count++;
     }
+    gs->frame_fault = gs->scan_fault;
+    gs->scan_fault = 0u;
+    gs->data_ready = 1;
 }
 
 /* ================= 1. 设备初始化 ================= */
@@ -121,10 +124,15 @@ void Bsp_Grayscale_Init_Device(bsp_grayscale_t *gs)
         gs->white[i]   = 0;
         gs->black[i]   = 0;
         gs->digital[i] = 0;
+        gs->scan_analog[i] = 0;
+        gs->scan_norm[i] = 0;
+        gs->scan_digital[i] = 0;
     }
 
     gs->current_ch       = 0;
     gs->data_ready       = 0;
+    gs->frame_fault      = 0;
+    gs->scan_fault       = 0;
     gs->calibrated       = 0;
     gs->black_calibrated = 0;
     gs->black_count      = 0;
@@ -150,7 +158,16 @@ void Bsp_Grayscale_Update(bsp_grayscale_t *gs)
     gs->last_switch_tick = now;
 
     /* ① 读取当前通道ADC值（上一次选通的通道，现已稳定） */
-    gs->analog[gs->current_ch] = gs->ADC_Read();
+    uint16_t sample = gs->ADC_Read();
+    bool sample_valid = sample != BSP_GRAY_ADC_INVALID &&
+                        sample <= BSP_GRAY_ADC_MAX;
+    if (sample_valid) {
+        gs->scan_analog[gs->current_ch] = sample;
+    } else {
+        /* 不把上一通道的值灌入当前通道。保留该通道上一轮工作值，
+         * 并锁存整帧故障；控制层看到frame_fault后必须停止运动。 */
+        gs->scan_fault = 1u;
+    }
 
     /* ①.5 校准策略: 开机自动校准white + 手动K4校准black
      * 去除动态跟踪: 实测发现动态跟踪会把black越拉越低(白地ADC噪声波动),
@@ -159,15 +176,17 @@ void Bsp_Grayscale_Update(bsp_grayscale_t *gs)
      * white由开机自动校准确定(车放白地), 后续不更新。 */
 
     /* ② 归一化（0=白, 1=黑） */
-    Gray_Normalize(gs, gs->current_ch);
+    if (sample_valid) {
+        Gray_Normalize(gs, gs->current_ch);
+    }
 
     /* ③ 黑白判断: 滞回比较器(自适应极性)
      * 需要白色校准(calibrated) + 黑色校准(black_calibrated)都完成才判断,
      * 否则强制白色(防止black=white/2猜测值导致反向极性传感器误判) */
-    if (gs->calibrated && gs->black_calibrated) {
+    if (sample_valid && gs->calibrated && gs->black_calibrated) {
         Gray_Hysteresis(gs, gs->current_ch);
-    } else {
-        gs->digital[gs->current_ch] = 0;  /* 未校准黑线: 强制白 */
+    } else if (sample_valid) {
+        gs->scan_digital[gs->current_ch] = 0;  /* 未校准黑线: 强制白 */
     }
 
     /* ④ 切换到下一个通道 */
@@ -176,8 +195,7 @@ void Bsp_Grayscale_Update(bsp_grayscale_t *gs)
 
     /* ⑤ 一轮8路扫描完成 */
     if (gs->current_ch == 0) {
-        Gray_Count_Black(gs);
-        gs->data_ready = 1;
+        Gray_Publish_Frame(gs);
     }
 }
 
@@ -185,7 +203,7 @@ void Bsp_Grayscale_Update(bsp_grayscale_t *gs)
 /* 使用方法：先让传感器扫描至少一轮（data_ready=1），再调用校准 */
 void Bsp_Grayscale_Calibrate_White(bsp_grayscale_t *gs)
 {
-    if (gs == NULL) return;
+    if (gs == NULL || gs->frame_fault) return;
     for (uint8_t i = 0; i < BSP_GRAY_CHANNEL_NUM; i++) {
         gs->white[i] = gs->analog[i];
     }
@@ -194,7 +212,7 @@ void Bsp_Grayscale_Calibrate_White(bsp_grayscale_t *gs)
 
 void Bsp_Grayscale_Calibrate_Black(bsp_grayscale_t *gs)
 {
-    if (gs == NULL) return;
+    if (gs == NULL || gs->frame_fault) return;
     for (uint8_t i = 0; i < BSP_GRAY_CHANNEL_NUM; i++) {
         gs->black[i] = gs->analog[i];
     }

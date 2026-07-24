@@ -32,33 +32,27 @@ static float     s_right_speed_filtered;
 
 /* ================= 1. 硬件底层函数 (HW_ 前缀) ================= */
 
-static void HW_GPIO_Config(void)
-{
-    /* 方向引脚由 SysConfig 配置为输出 */
-}
-
 static void HW_Motor_Init(bsp_motor_t *motor)
 {
     if (motor == NULL) return;
 
-    DL_TimerG_enableClock(motor->pwm_timer);
-    DL_TimerG_startCounter(motor->pwm_timer);
-
-    motor->Gpio_Config();
-}
-
-static void HW_Gpio_Write(void *port, uint32_t pin, uint8_t level)
-{
-    if (port == NULL) return;
-    GPIO_WritePin((GPIO_Regs *)port, pin, level);
+    if (motor->input1_pwm.timer != NULL) {
+        DL_Timer_enableClock((GPTIMER_Regs *)motor->input1_pwm.timer);
+        DL_Timer_startCounter((GPTIMER_Regs *)motor->input1_pwm.timer);
+    }
+    if (motor->input2_pwm.timer != NULL &&
+        motor->input2_pwm.timer != motor->input1_pwm.timer) {
+        DL_Timer_enableClock((GPTIMER_Regs *)motor->input2_pwm.timer);
+        DL_Timer_startCounter((GPTIMER_Regs *)motor->input2_pwm.timer);
+    }
 }
 
 static void HW_Pwm_Write(void *timer, uint32_t channel, uint32_t duty)
 {
     if (timer == NULL) return;
     uint32_t compare = Motor_Pwm_DutyToCompare(duty, MOTOR_PWM_PERIOD);
-    DL_TimerG_setCaptureCompareValue((GPTIMER_Regs *)timer, compare,
-                                     (DL_TIMER_CC_INDEX)channel);
+    DL_Timer_setCaptureCompareValue((GPTIMER_Regs *)timer, compare,
+                                    (DL_TIMER_CC_INDEX)channel);
 }
 
 /* 左电机编码器读取 — GPIO 4x正交累计值差分。 */
@@ -100,31 +94,23 @@ static int32_t HW_Enc_Read_Right(void *enc_timer)
 /* ================= 2. 对象实例化与引脚拼装 ================= */
 
 bsp_motor_t Motor_Left = {
-    .dir_pin1   = {MOTOR_LEFT_DIR1_PORT, MOTOR_LEFT_DIR1_PIN},
-    .dir_pin2   = {MOTOR_LEFT_DIR2_PORT, MOTOR_LEFT_DIR2_PIN},
-    .pwm_timer  = MOTOR_LEFT_PWM_TIMER,
-    .pwm_channel = MOTOR_LEFT_PWM_CHANNEL,
+    .input1_pwm = {MOTOR_LEFT_AIN1_PWM_TIMER, MOTOR_LEFT_AIN1_PWM_CHANNEL},
+    .input2_pwm = {MOTOR_LEFT_AIN2_PWM_TIMER, MOTOR_LEFT_AIN2_PWM_CHANNEL},
     .enc_timer  = NULL,
     .use_speed_pid = false,
 
-    .Gpio_Config = HW_GPIO_Config,
     .Init        = HW_Motor_Init,
-    .Gpio_Write  = HW_Gpio_Write,
     .Pwm_Write   = HW_Pwm_Write,
     .Enc_Read    = HW_Enc_Read_Left
 };
 
 bsp_motor_t Motor_Right = {
-    .dir_pin1   = {MOTOR_RIGHT_DIR1_PORT, MOTOR_RIGHT_DIR1_PIN},
-    .dir_pin2   = {MOTOR_RIGHT_DIR2_PORT, MOTOR_RIGHT_DIR2_PIN},
-    .pwm_timer  = MOTOR_RIGHT_PWM_TIMER,
-    .pwm_channel = MOTOR_RIGHT_PWM_CHANNEL,
+    .input1_pwm = {MOTOR_RIGHT_BIN1_PWM_TIMER, MOTOR_RIGHT_BIN1_PWM_CHANNEL},
+    .input2_pwm = {MOTOR_RIGHT_BIN2_PWM_TIMER, MOTOR_RIGHT_BIN2_PWM_CHANNEL},
     .enc_timer  = NULL,
     .use_speed_pid = false,
 
-    .Gpio_Config = HW_GPIO_Config,
     .Init        = HW_Motor_Init,
-    .Gpio_Write  = HW_Gpio_Write,
     .Pwm_Write   = HW_Pwm_Write,
     .Enc_Read    = HW_Enc_Read_Right
 };
@@ -241,6 +227,20 @@ void App_Motor_Enable_Speed_PID(bool enable)
         Bsp_Motor_Write_Pwm(&Motor_Right, Motor_Right.target_speed);
     }
 }
+
+void App_Motor_Set_Speed_PID(float kp, float ki, float kd)
+{
+    Pid_Set_Params(&s_left_speed_pid, kp, ki, kd);
+    Pid_Set_Params(&s_right_speed_pid, kp, ki, kd);
+    Pid_Reset(&s_left_speed_pid);
+    Pid_Reset(&s_right_speed_pid);
+    s_left_speed_filtered = 0.0f;
+    s_right_speed_filtered = 0.0f;
+}
+
+float App_Motor_Get_Speed_PID_Kp(void) { return s_left_speed_pid.kp; }
+float App_Motor_Get_Speed_PID_Ki(void) { return s_left_speed_pid.ki; }
+float App_Motor_Get_Speed_PID_Kd(void) { return s_left_speed_pid.kd; }
 
 void App_Motor_Set_Speed_Scale(float scale)
 {

@@ -8,9 +8,8 @@ This module drives:
 The default values MUST match the values in APP/Inc/user_tuning.h.
 A unit test (tests/test_param_schema.py) verifies this consistency.
 
-Only the 8 remotely-tunable parameters live here. Firmware-local parameters
-(motor speed PID, gyro PID, limits, calibration thresholds) remain solely in
-user_tuning.h and are never exposed to the host protocol.
+Motor-loop parameters are exposed for stationary TUNING builds; the firmware
+rejects their modification while normal vehicle motion is active.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ from typing import Any
 
 
 # Each entry maps a protocol parameter name to its firmware macro and bounds.
-# Order matters: optimizer searches KP/KD/GDAMP/RATHR first, then VBASE/VSTR/VCUR.
+# Order matters: the optimizer searches only its explicit groups below.
 #
 # UI fields:
 #   desc — short label under the parameter name
@@ -32,7 +31,7 @@ PARAM_SCHEMA: list[dict[str, Any]] = [
         "desc": "循迹比例P",
         "kind": "float",
         "help": (
-            "输入：灰度中心偏差 le（正=偏右，负=偏左）。"
+            "输入：鱼眼12路中心偏差 le（正=偏右，负=偏左）。"
             "输出：转向差速量。KP 越大，偏线时纠正越猛。"
             "偏小：跟线慢、弯道切内侧；偏大：左右甩、冲出黑线。"
             "首轮建议 2.5~4.0，先只动 KP。"
@@ -78,24 +77,24 @@ PARAM_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "VBASE",
         "macro": "USER_TRACK_BASE_SPEED",
-        "min": 0, "max": 100, "default": 28, "step": 1,
+        "min": 0, "max": 100, "default": 18, "step": 1,
         "desc": "启动基础PWM",
         "kind": "int",
         "help": (
             "启动循迹时的初始基础 PWM（百分比）。"
             "跑起来后会向 VSTR/VCUR 插值目标渐变，不是全程固定车速。"
             "太小：起步无力；太大：一启动就冲，校准/进弯都危险。"
-            "首轮实车建议 25~32，确认能压住线再往上加。"
+            "12路鱼眼首跑默认 18，确认能压住线再往上加。"
         ),
     },
     {
         "name": "VSTR",
         "macro": "USER_TRACK_SPEED_STRAIGHT",
-        "min": 0, "max": 100, "default": 30, "step": 1,
+        "min": 0, "max": 100, "default": 20, "step": 1,
         "desc": "直道PWM",
         "kind": "int",
         "help": (
-            "灰度几乎居中（|le|≈0）时的目标基础 PWM，直道速度上限。"
+            "鱼眼线型几乎居中（|le|≈0）时的目标基础 PWM，直道速度上限。"
             "左右轮最终 ≈ 基础PWM ± 转向量。"
             "想提速先加 VSTR；若出弯后猛冲再甩，先降 VSTR 或加 KD。"
             "一般保持 VSTR ≥ VCUR。"
@@ -104,7 +103,7 @@ PARAM_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "VCUR",
         "macro": "USER_TRACK_SPEED_CURVE",
-        "min": 0, "max": 100, "default": 26, "step": 1,
+        "min": 0, "max": 100, "default": 16, "step": 1,
         "desc": "偏线/弯道PWM",
         "kind": "int",
         "help": (
@@ -117,15 +116,55 @@ PARAM_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "RATHR",
         "macro": "USER_RIGHT_ANGLE_THRESHOLD",
-        "min": 0.5, "max": 10.0, "default": 4.0, "step": 0.1,
+        "min": 5.0, "max": 10.0, "default": 6.0, "step": 1.0,
         "desc": "直角最少黑通道",
         "kind": "float",
         "help": (
-            "方形拐角识别门槛：中心对仍压线，且左侧连续黑通道数达到此值。"
-            "内部会按四舍五入取整，且固件下限钳到至少 4 路。"
-            "偏小：普通跑偏/0x0E 类掩码被误判成直角；偏大：真直角漏检。"
-            "只影响拐角检测，不改变直线 PID。首轮保持 4.0。"
+            "方形拐角识别门槛：中心入口仍压线，且左侧或右侧远端形成支路，"
+            "12路鱼眼总黑点数达到此整数值，且不能全黑。"
+            "固件与上位机统一限制为 5~10。偏小易误判宽线，偏大易漏角。"
+            "只影响拐角检测，不改变直线 PID。首轮保持 6.0。"
         ),
+    },
+    {
+        "name": "MKP",
+        "macro": "USER_MOTOR_SPEED_PID_KP",
+        "min": 0.0, "max": 5.0, "default": 0.55, "step": 0.05,
+        "desc": "电机速度环P",
+        "kind": "float",
+        "help": "仅TUNING且车辆静止/台架测试可改；应用后左右速度PID同时复位。",
+    },
+    {
+        "name": "MKI",
+        "macro": "USER_MOTOR_SPEED_PID_KI",
+        "min": 0.0, "max": 1.0, "default": 0.0, "step": 0.01,
+        "desc": "电机速度环I",
+        "kind": "float",
+        "help": "速度环积分，通常保持0，避免起停积分饱和；只允许静止调节。",
+    },
+    {
+        "name": "MKD",
+        "macro": "USER_MOTOR_SPEED_PID_KD",
+        "min": 0.0, "max": 5.0, "default": 0.0, "step": 0.05,
+        "desc": "电机速度环D",
+        "kind": "float",
+        "help": "速度变化阻尼；编码器量化噪声较大时不要过高，只允许静止调节。",
+    },
+    {
+        "name": "MSL",
+        "macro": "USER_MOTOR_SPEED_SCALE_LEFT",
+        "min": 0.01, "max": 2.0, "default": 0.161, "step": 0.001,
+        "desc": "左电机前馈比例",
+        "kind": "float",
+        "help": "左轮编码器计数/周期对应1%PWM的比例尺；架空车轮标定后填写。",
+    },
+    {
+        "name": "MSR",
+        "macro": "USER_MOTOR_SPEED_SCALE_RIGHT",
+        "min": 0.01, "max": 2.0, "default": 0.164, "step": 0.001,
+        "desc": "右电机前馈比例",
+        "kind": "float",
+        "help": "右轮独立比例尺；架空车轮标定后填写，不与左轮共用。",
     },
 ]
 
@@ -148,7 +187,7 @@ TELEMETRY_PARAM_FIELDS: dict[str, str] = {
 OPTIMIZER_GROUP_GAINS = ["KP", "KD", "GDAMP", "RATHR"]
 OPTIMIZER_GROUP_SPEED = ["VBASE", "VSTR", "VCUR"]
 # Parameters the optimizer must never touch automatically.
-OPTIMIZER_LOCKED = ["KI"]
+OPTIMIZER_LOCKED = ["KI", "MKP", "MKI", "MKD", "MSL", "MSR"]
 
 
 def parse_user_tuning_defaults(header_text: str) -> dict[str, float]:

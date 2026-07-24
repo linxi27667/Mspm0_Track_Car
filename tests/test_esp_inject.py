@@ -26,6 +26,7 @@ if str(HOST) not in sys.path:
 from protocol import (  # noqa: E402
     MAX_FRAME_BYTES,
     MAX_JSON_BYTES,
+    PARAMS,
     PROTOCOL_VERSION,
     build_ack,
     build_cmd,
@@ -48,7 +49,12 @@ def make_telemetry(seq=1, **updates):
         "t": "tele",
         "seq": seq,
         "ms": seq * 100,
-        "adc": [200, 300, 2000, 3500, 3500, 2000, 300, 200],
+        "line": [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+        "lm": 0x060,
+        "bc": 2,
+        "sa": 5,
+        "se": 0,
+        "bp": 1,
         "gz": 0.3,
         "el": 40,
         "er": 41,
@@ -60,6 +66,12 @@ def make_telemetry(seq=1, **updates):
     }
     obj.update(updates)
     return obj
+
+
+def full_applied(**updates):
+    values = {name: info["default"] for name, info in PARAMS.items()}
+    values.update(updates)
+    return values
 
 
 def make_ack_frame(request_id, ok=True, kind="set", applied=None, error=None):
@@ -292,7 +304,7 @@ class ErrorAndResyncTests(EspInjectBase):
 
     def test_bad_crc_frame_ignored(self):
         """CRC 错误的帧被丢弃，不触发回调。"""
-        bad = make_bad_crc_frame('{"v":1,"t":"tele","seq":1,"ms":0,"adc":[100,100,100,100,100,100,100,100],"gz":0,"el":0,"er":0,"le":0,"po":0,"st":"LF","kp":5,"kd":1}')
+        bad = make_bad_crc_frame('{"v":1,"t":"tele","seq":1,"ms":0,"line":[0,0,0,0,0,1,1,0,0,0,0,0],"lm":96,"bc":2,"sa":5,"se":0,"bp":1,"gz":0,"el":0,"er":0,"le":0,"po":0,"st":"LF"}')
         good = encode_frame(make_telemetry(seq=2))
         self.client.sendall(bad + good)
         self.assertTrue(self.wait_for(lambda: len(self.telemetry) >= 1))
@@ -317,7 +329,7 @@ class ErrorAndResyncTests(EspInjectBase):
 
     def test_bad_then_good_then_bad_sequence(self):
         """坏帧-好帧-坏帧交替，只有好帧投递。"""
-        bad = make_bad_crc_frame('{"v":1,"t":"tele","seq":0,"ms":0,"adc":[0,0,0,0,0,0,0,0],"gz":0,"el":0,"er":0,"le":0,"po":0,"st":"ID","kp":5,"kd":1}')
+        bad = make_bad_crc_frame('{"v":1,"t":"tele","seq":0,"ms":0,"line":[0,0,0,0,0,1,1,0,0,0,0,0],"lm":96,"bc":2,"sa":5,"se":0,"bp":1,"gz":0,"el":0,"er":0,"le":0,"po":0,"st":"ID"}')
         good1 = encode_frame(make_telemetry(seq=10))
         good2 = encode_frame(make_telemetry(seq=11))
         self.client.sendall(bad + good1 + bad + good2)
@@ -445,8 +457,7 @@ class AckRoundTripTests(EspInjectBase):
         # ESP 回复 ACK
         ack_frame = make_ack_frame(
             req["id"], ok=True, kind="set",
-            applied={"KP": 6.0, "KI": 0.0, "KD": 1.0, "GDAMP": 0.15,
-                     "VBASE": 40, "VSTR": 50, "VCUR": 26, "RATHR": 2.5},
+            applied=full_applied(KP=6.0),
         )
         self.send_bytes(ack_frame)
         self.assertTrue(self.wait_for(lambda: len(self.confirmed) >= 1))
@@ -483,10 +494,8 @@ class AckRoundTripTests(EspInjectBase):
         self.assertIsNotNone(req)
         # 发送一个错误 id 的 ACK
         wrong_id = req["id"] + 999
-        self.send_bytes(make_ack_frame(wrong_id, ok=True, kind="set",
-                                       applied={"KP": 5.0, "KI": 0.0, "KD": 2.0,
-                                                "GDAMP": 0.15, "VBASE": 40,
-                                                "VSTR": 50, "VCUR": 26, "RATHR": 2.5}))
+        self.send_bytes(make_ack_frame(
+            wrong_id, ok=True, kind="set", applied=full_applied(KD=2.0)))
         time.sleep(0.5)
         # 不应确认
         self.assertEqual(len(self.confirmed), 0)
@@ -507,8 +516,7 @@ class AckRoundTripTests(EspInjectBase):
         # 回复 ACK
         self.send_bytes(make_ack_frame(
             req["id"], ok=True, kind="set",
-            applied={"KP": 5.0, "KI": 0.0, "KD": 1.0, "GDAMP": 0.15,
-                     "VBASE": 45, "VSTR": 50, "VCUR": 26, "RATHR": 2.5},
+            applied=full_applied(VBASE=45),
         ))
         self.assertTrue(self.wait_for(lambda: len(self.confirmed) >= 1))
         self.assertTrue(self.wait_for(lambda: len(self.telemetry) >= 6))
@@ -583,7 +591,7 @@ class StressTests(EspInjectBase):
         """遥测中包含参数镜像字段（kp/ki/kd/gd/vb/vs/vc/rt），全部投递。"""
         self.send_frame(make_telemetry(
             seq=1, kp=7.5, ki=0.1, kd=2.0, gd=0.3,
-            vb=45, vs=55, vc=28, rt=3.0,
+            vb=45, vs=55, vc=28, rt=6.0,
         ))
         self.assertTrue(self.wait_for(lambda: len(self.telemetry) >= 1))
         t = self.telemetry[0]
@@ -594,16 +602,18 @@ class StressTests(EspInjectBase):
         self.assertEqual(t["vb"], 45)
         self.assertEqual(t["vs"], 55)
         self.assertEqual(t["vc"], 28)
-        self.assertAlmostEqual(t["rt"], 3.0)
+        self.assertAlmostEqual(t["rt"], 6.0)
 
     def test_extended_telemetry_fields_delivered(self):
-        """遥测扩展字段（bc/drop/cal）正常投递。"""
-        self.send_frame(make_telemetry(seq=1, bc=2, drop=1, cal=3))
+        """鱼眼健康与链路扩展字段正常投递。"""
+        self.send_frame(make_telemetry(seq=1, drop=1, sa=9, se=3, bp=0))
         self.assertTrue(self.wait_for(lambda: len(self.telemetry) >= 1))
         t = self.telemetry[0]
         self.assertEqual(t["bc"], 2)
         self.assertEqual(t["drop"], 1)
-        self.assertEqual(t["cal"], 3)
+        self.assertEqual(t["sa"], 9)
+        self.assertEqual(t["se"], 3)
+        self.assertEqual(t["bp"], 0)
 
 
 if __name__ == "__main__":

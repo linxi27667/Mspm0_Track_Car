@@ -30,7 +30,12 @@ def telemetry(seq=1, **updates):
         "t": "tele",
         "seq": seq,
         "ms": seq * 10,
-        "adc": [100] * 8,
+        "line": [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+        "lm": 0x060,
+        "bc": 2,
+        "sa": 5,
+        "se": 0,
+        "bp": 1,
         "gz": 0.2,
         "el": 40,
         "er": 41,
@@ -107,7 +112,7 @@ class TcpServerTests(unittest.TestCase):
         valid = encode_frame(telemetry(3))
         parts = valid.rstrip(b"\n").split(b" ", 3)
         bad_crc = parts[0] + b" " + parts[1] + b" 00000000 " + parts[3] + b"\n"
-        invalid_schema = encode_frame(telemetry(4, adc=[]))
+        invalid_schema = encode_frame(telemetry(4, line=[]))
         raw_json = json.dumps(telemetry(5)).encode("utf-8") + b"\n"
         self.client.sendall(bad_crc + invalid_schema + raw_json + valid)
 

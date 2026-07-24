@@ -19,7 +19,7 @@ void Bsp_Motor_Init_Device(bsp_motor_t *motor)
     }
 }
 
-/* ================= 2. PWM底层写入（方向+占空比） ================= */
+/* ================= 2. AT8236双输入PWM写入 ================= */
 void Bsp_Motor_Write_Pwm(bsp_motor_t *motor, int32_t pwm_val)
 {
     if (motor == NULL) return;
@@ -32,28 +32,28 @@ void Bsp_Motor_Write_Pwm(bsp_motor_t *motor, int32_t pwm_val)
     motor->current_pwm = pwm_val;
 
     if (pwm_val > 0) {
-        if (motor->Gpio_Write) {
-            motor->Gpio_Write(motor->dir_pin1.port, motor->dir_pin1.pin, 1);
-            motor->Gpio_Write(motor->dir_pin2.port, motor->dir_pin2.pin, 0);
-        }
         if (motor->Pwm_Write) {
-            motor->Pwm_Write(motor->pwm_timer, motor->pwm_channel, (uint32_t)pwm_val);
+            /* 先关闭反向输入，再输出正向PWM，避免换向时两路同时有效。 */
+            motor->Pwm_Write(motor->input2_pwm.timer,
+                             motor->input2_pwm.channel, 0u);
+            motor->Pwm_Write(motor->input1_pwm.timer,
+                             motor->input1_pwm.channel, (uint32_t)pwm_val);
         }
     } else if (pwm_val < 0) {
-        if (motor->Gpio_Write) {
-            motor->Gpio_Write(motor->dir_pin1.port, motor->dir_pin1.pin, 0);
-            motor->Gpio_Write(motor->dir_pin2.port, motor->dir_pin2.pin, 1);
-        }
         if (motor->Pwm_Write) {
-            motor->Pwm_Write(motor->pwm_timer, motor->pwm_channel, (uint32_t)(-pwm_val));
+            /* 先关闭正向输入，再输出反向PWM。 */
+            motor->Pwm_Write(motor->input1_pwm.timer,
+                             motor->input1_pwm.channel, 0u);
+            motor->Pwm_Write(motor->input2_pwm.timer,
+                             motor->input2_pwm.channel, (uint32_t)(-pwm_val));
         }
     } else {
-        if (motor->Gpio_Write) {
-            motor->Gpio_Write(motor->dir_pin1.port, motor->dir_pin1.pin, 0);
-            motor->Gpio_Write(motor->dir_pin2.port, motor->dir_pin2.pin, 0);
-        }
         if (motor->Pwm_Write) {
-            motor->Pwm_Write(motor->pwm_timer, motor->pwm_channel, 0);
+            /* 双低为滑行停车，也是故障状态的无源安全输出。 */
+            motor->Pwm_Write(motor->input1_pwm.timer,
+                             motor->input1_pwm.channel, 0u);
+            motor->Pwm_Write(motor->input2_pwm.timer,
+                             motor->input2_pwm.channel, 0u);
         }
     }
 }

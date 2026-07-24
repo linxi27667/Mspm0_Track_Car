@@ -95,8 +95,12 @@ class RequestManagerConfirmedTests(unittest.TestCase):
         self.assertTrue(rm.is_busy())
         self.assertEqual(tcp.get_sent_count(), 1)
 
-        applied = {"KP": 6.0, "KI": 0.0, "KD": 1.0, "GDAMP": 0.15,
-                   "VBASE": 40, "VSTR": 50, "VCUR": 26, "RATHR": 2.5}
+        applied = {
+            "KP": 6.0, "KI": 0.0, "KD": 1.0, "GDAMP": 0.15,
+            "VBASE": 18, "VSTR": 20, "VCUR": 16, "RATHR": 6.0,
+            "MKP": 1.2, "MKI": 0.1, "MKD": 0.0,
+            "MSL": 0.161, "MSR": 0.164,
+        }
         ack = make_ack_dict(1, ok=True, applied=applied)
         rm.on_ack(ack)
 

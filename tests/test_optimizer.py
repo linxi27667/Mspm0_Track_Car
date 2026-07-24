@@ -146,10 +146,10 @@ class CandidateGeneratorTests(unittest.TestCase):
         """一轮无改进后步长减半。"""
         base = default_params()
         gen = CandidateGenerator(base)
-        # 增益组 4 个坐标 × 2 方向 = 8 个候选，全部拒绝
+        # RATHR=6 位于 5~10 范围内，增益组四个坐标均有正负方向。
         for _ in range(8):
             cand = gen.next_candidate()
-            self.assertIsNotNone(cand, "should have 8 candidates in gain group round 1")
+            self.assertIsNotNone(cand, "should have 8 effective gain candidates")
             gen.report_result(accepted=False)
         # 步长应减半
         cand = gen.next_candidate()
@@ -320,13 +320,21 @@ class TrialCollectorTests(unittest.TestCase):
         self.assertAlmostEqual(tc._le_sq_sum, 1.0 + 1.0 + 4.0)
 
     def test_fault_counting(self):
-        """bc 字段非零计为故障。"""
+        """鱼眼通信错误累计值只按增量计入故障。"""
         tc = TrialCollector(target_laps=5)
         tc.start(start_ms=0)
-        tc.feed(make_tele(st="LF", ms=0, bc=0))
-        tc.feed(make_tele(st="LF", ms=100, bc=1))  # 故障帧
-        tc.feed(make_tele(st="LF", ms=200, bc=2))  # 故障帧
+        tc.feed(make_tele(st="LF", ms=0, se=10))
+        tc.feed(make_tele(st="LF", ms=100, se=11))
+        tc.feed(make_tele(st="LF", ms=200, se=12))
         self.assertEqual(tc._fault_count, 2)
+
+    def test_stale_path_fish_frame_counting(self):
+        """完整帧龄超过固件 50 ms 门限时计为陈旧帧。"""
+        tc = TrialCollector(target_laps=5)
+        tc.start(start_ms=0)
+        tc.feed(make_tele(st="LF", ms=0, sa=50))
+        tc.feed(make_tele(st="LF", ms=100, sa=51))
+        self.assertEqual(tc._stale_count, 1)
 
 
 # ============================================================
@@ -615,7 +623,7 @@ class GenerateRaceHeaderTests(unittest.TestCase):
         """8 个可调参数都被替换。"""
         best = {
             "KP": 6.5, "KI": 0.0, "KD": 1.5, "GDAMP": 0.22,
-            "VBASE": 42, "VSTR": 52, "VCUR": 28, "RATHR": 3.0,
+            "VBASE": 42, "VSTR": 52, "VCUR": 28, "RATHR": 4.0,
         }
         result = generate_race_header(best, self.TEMPLATE)
         self.assertIn("USER_LINE_PID_KP           6.5f", result)
@@ -625,12 +633,12 @@ class GenerateRaceHeaderTests(unittest.TestCase):
         self.assertIn("USER_TRACK_BASE_SPEED      42", result)
         self.assertIn("USER_TRACK_SPEED_STRAIGHT  52", result)
         self.assertIn("USER_TRACK_SPEED_CURVE     28", result)
-        self.assertIn("USER_RIGHT_ANGLE_THRESHOLD 3f", result)
+        self.assertIn("USER_RIGHT_ANGLE_THRESHOLD 4f", result)
 
     def test_preserves_non_tunable_params(self):
         """不可调参数（如 USER_GYRO_PID_KP）保持不变。"""
         best = {"KP": 6.0, "KI": 0.0, "KD": 1.0, "GDAMP": 0.15,
-                "VBASE": 40, "VSTR": 50, "VCUR": 26, "RATHR": 2.5}
+                "VBASE": 40, "VSTR": 50, "VCUR": 26, "RATHR": 4.0}
         result = generate_race_header(best, self.TEMPLATE)
         # GYRO_PID_KP 不在 8 个可调参数中，应保持 3.0f
         self.assertIn("USER_GYRO_PID_KP           3.0f", result)
@@ -638,7 +646,7 @@ class GenerateRaceHeaderTests(unittest.TestCase):
     def test_preserves_comments_and_structure(self):
         """注释和文件结构保持不变。"""
         best = {"KP": 6.0, "KI": 0.0, "KD": 1.0, "GDAMP": 0.15,
-                "VBASE": 40, "VSTR": 50, "VCUR": 26, "RATHR": 2.5}
+                "VBASE": 40, "VSTR": 50, "VCUR": 26, "RATHR": 4.0}
         result = generate_race_header(best, self.TEMPLATE)
         self.assertIn("#ifndef USER_TUNING_H", result)
         self.assertIn("#endif /* USER_TUNING_H */", result)
@@ -648,7 +656,7 @@ class GenerateRaceHeaderTests(unittest.TestCase):
     def test_int_params_no_f_suffix(self):
         """int 类型参数不加 'f' 后缀。"""
         best = {"KP": 5.0, "KI": 0.0, "KD": 1.0, "GDAMP": 0.15,
-                "VBASE": 45, "VSTR": 55, "VCUR": 30, "RATHR": 2.5}
+                "VBASE": 45, "VSTR": 55, "VCUR": 30, "RATHR": 4.0}
         result = generate_race_header(best, self.TEMPLATE)
         # VBASE 是 int，应为 "45" 不是 "45f"
         self.assertIn("USER_TRACK_BASE_SPEED      45 ", result)
@@ -657,7 +665,7 @@ class GenerateRaceHeaderTests(unittest.TestCase):
     def test_float_params_have_f_suffix(self):
         """float 类型参数加 'f' 后缀。"""
         best = {"KP": 7.0, "KI": 0.0, "KD": 1.0, "GDAMP": 0.15,
-                "VBASE": 40, "VSTR": 50, "VCUR": 26, "RATHR": 2.5}
+                "VBASE": 40, "VSTR": 50, "VCUR": 26, "RATHR": 4.0}
         result = generate_race_header(best, self.TEMPLATE)
         # KP 是 float，应为 "7f"
         self.assertIn("USER_LINE_PID_KP           7f", result)
@@ -670,7 +678,7 @@ class GenerateRaceHeaderTests(unittest.TestCase):
         with open(header_path, "r", encoding="utf-8") as f:
             template = f.read()
         best = {"KP": 6.0, "KI": 0.0, "KD": 1.5, "GDAMP": 0.2,
-                "VBASE": 42, "VSTR": 52, "VCUR": 28, "RATHR": 3.0}
+                "VBASE": 42, "VSTR": 52, "VCUR": 28, "RATHR": 4.0}
         result = generate_race_header(best, template)
         # 验证关键替换
         self.assertIn("USER_LINE_PID_KP           6f", result)

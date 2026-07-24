@@ -10,12 +10,14 @@
 
 /* 硬件驱动层 (BSP) */
 #include "bsp_led.h"
+#include "bsp_buzzer.h"
 #include "bsp_key.h"
 #include "bsp_uart.h"
 #include "bsp_encoder_motor.h"
 #include "bsp_sw_i2c.h"
+#include "bsp_oled.h"
 #include "bsp_icm42688.h"
-#include "bsp_grayscale.h"
+#include "bsp_path_fish.h"
 #include "bsp_esp_at.h"
 
 #endif /* __BSP_ALL_H__ */

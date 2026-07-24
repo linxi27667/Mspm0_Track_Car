@@ -8,11 +8,9 @@
 #include "bsp_led.h"
 #include "ti_msp_dl_config.h"
 
-/* ============ LED硬件配置（由SysConfig生成） ============ */
-#define LED1_PORT       Led_Group_PORT
-#define LED1_PIN        Led_Group_LED1_PIN
-#define LED2_PORT       Led_Group_PORT
-#define LED2_PIN        Led_Group_LED2_PIN
+/* ============ 板载状态LED硬件配置（板子1.0网表：PB4，高有效） ============ */
+#define LED1_PORT       Board_Output_PORT
+#define LED1_PIN        Board_Output_STATUS_LED_PIN
 
 /* ============ 业务接口声明 ============ */
 extern led_t Led_Devices[BSP_LED_NUM];

@@ -13,7 +13,8 @@ def compile_and_run(source: str) -> subprocess.CompletedProcess:
         exe = Path(tmpdir) / "_track_logic_test.exe"
         tmp.write_text(source, encoding="utf-8")
         compile_result = subprocess.run(
-            ["gcc", "-std=c99", "-Wall", "-Wextra", "-I", str(ROOT), str(tmp), "-o", str(exe)],
+            ["gcc", "-std=c99", "-Wall", "-Wextra", "-I", str(ROOT),
+             "-I", str(ROOT / "BSP" / "Inc"), str(tmp), "-o", str(exe)],
             check=False,
             capture_output=True,
             text=True,
@@ -35,47 +36,50 @@ def compile_and_run(source: str) -> subprocess.CompletedProcess:
 
 
 class TrackLogicTests(unittest.TestCase):
-    def test_line_error_uses_only_digital_channel_weights(self):
+    def test_line_error_uses_all_12_digital_channel_weights(self):
         result = compile_and_run(
             r'''
             #include "TASK/track_logic.h"
 
             int main(void) {
-                float centered = Track_ComputeDigitalLineError8(0x18u, 2.0f);
+                float centered = Track_ComputeDigitalLineError12(0x060u, 2.0f);
                 if (centered < -0.01f || centered > 0.01f) return 1;
-                if (Track_ComputeDigitalLineError8(0x00u, -1.25f) != -1.25f) return 2;
-                if (Track_ComputeDigitalLineError8(0x06u, 0.0f) != -2.0f) return 3;
-                if (Track_ComputeDigitalLineError8(0x60u, 0.0f) != 2.0f) return 4;
-                if (Track_ComputeDigitalLineError8(0x08u, 0.0f) != -0.5f) return 5;
-                if (Track_ComputeDigitalLineError8(0x10u, 0.0f) != 0.5f) return 6;
+                if (Track_ComputeDigitalLineError12(0x000u, -1.25f) != -1.25f) return 2;
+                if (Track_ComputeDigitalLineError12(0x001u, 0.0f) != -3.5f) return 3;
+                if (Track_ComputeDigitalLineError12(0x800u, 0.0f) < 3.49f) return 4;
+                if (Track_ComputeDigitalLineError12(0x020u, 0.0f) >= 0.0f) return 5;
+                if (Track_ComputeDigitalLineError12(0x040u, 0.0f) <= 0.0f) return 6;
+                if (Track_LimitRecoveryError(-3.5f, 1.5f) != -1.5f) return 7;
+                if (Track_LimitRecoveryError(3.5f, 1.5f) != 1.5f) return 8;
+                if (Track_LimitRecoveryError(0.5f, 1.5f) != 0.5f) return 9;
                 return 0;
             }
             '''
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
-    def test_line_classifier_accepts_measured_split_left_corners(self):
+    def test_12_channel_classifier_handles_line_corner_white_black_and_noise(self):
         result = compile_and_run(
             r'''
             #include "TASK/track_logic.h"
 
             int main(void) {
-                track_line_observation_t center = Track_ClassifyLine8(0x18u, 3.0f, 4u);
-                track_line_observation_t left = Track_ClassifyLine8(0x0Cu, 0.0f, 4u);
-                track_line_observation_t right = Track_ClassifyLine8(0x30u, 0.0f, 4u);
-                if (center.type != TRACK_LINE_NORMAL || center.error != 0.0f) return 1;
+                track_line_observation_t center = Track_ClassifyLine12(0x060u, 3.0f, 6u);
+                track_line_observation_t left = Track_ClassifyLine12(0x00Cu, 0.0f, 6u);
+                track_line_observation_t right = Track_ClassifyLine12(0x300u, 0.0f, 6u);
+                if (center.type != TRACK_LINE_NORMAL ||
+                    Track_Abs_Float(center.error) > 0.001f) return 1;
                 if (left.type != TRACK_LINE_NORMAL || right.type != TRACK_LINE_NORMAL) return 2;
-                if (left.error != -right.error || left.error != -1.0f) return 3;
-                if (Track_ClassifyLine8(0x00u, 1.25f, 4u).type != TRACK_LINE_LOST) return 4;
-                if (Track_ClassifyLine8(0x81u, 1.25f, 4u).type != TRACK_LINE_INVALID) return 5;
-                if (Track_ClassifyLine8(0xFFu, 1.25f, 4u).type != TRACK_LINE_INVALID) return 6;
-                if (Track_ClassifyLine8(0x0Eu, 0.0f, 4u).type != TRACK_LINE_NORMAL) return 7;
-                if (Track_ClassifyLine8(0x0Fu, 0.0f, 4u).type != TRACK_LINE_LEFT_CORNER) return 8;
-                if (Track_ClassifyLine8(0x1Eu, 0.0f, 4u).type != TRACK_LINE_LEFT_CORNER) return 9;
-                if (Track_ClassifyLine8(0x09u, 0.0f, 4u).type != TRACK_LINE_LEFT_CORNER) return 10;
-                if (Track_ClassifyLine8(0x0Du, 0.0f, 4u).type != TRACK_LINE_LEFT_CORNER) return 11;
-                if (Track_ClassifyLine8(0x0Fu, 0.0f, 8u).type != TRACK_LINE_LEFT_CORNER) return 12;
-                if (Track_ClassifyLine8(0x1Fu, 0.0f, 8u).type != TRACK_LINE_LEFT_CORNER) return 13;
+                if (Track_Abs_Float(left.error + right.error) > 0.001f) return 3;
+                if (Track_ClassifyLine12(0x000u, 1.25f, 6u).type != TRACK_LINE_LOST) return 4;
+                if (Track_ClassifyLine12(0x801u, 1.25f, 6u).type != TRACK_LINE_INVALID) return 5;
+                if (Track_ClassifyLine12(0xFFFu, 1.25f, 6u).type != TRACK_LINE_INVALID) return 6;
+                if (Track_ClassifyLine12(0x01Eu, 0.0f, 6u).type != TRACK_LINE_NORMAL) return 7;
+                if (Track_ClassifyLine12(0x03Eu, 0.0f, 6u).type != TRACK_LINE_INVALID) return 8;
+                if (Track_ClassifyLine12(0x03Fu, 0.0f, 6u).type != TRACK_LINE_LEFT_CORNER) return 9;
+                if (Track_ClassifyLine12(0xFC0u, 0.0f, 6u).type != TRACK_LINE_LEFT_CORNER) return 10;
+                if (Track_ClassifyLine12(0x3CFu, 0.0f, 10u).type != TRACK_LINE_INVALID) return 11;
+                if (Track_ClassifyLine12(0x3FFu, 0.0f, 10u).type != TRACK_LINE_LEFT_CORNER) return 12;
                 return 0;
             }
             '''
@@ -98,15 +102,46 @@ class TrackLogicTests(unittest.TestCase):
                 if (corner != 1u) return 2;
                 corner = Track_UpdateCornerConfirm(corner, 2u, false);
                 if (corner != 0u) return 3;
+                corner = Track_UpdateCornerGate(0u, true, true, false, true);
+                if (corner != 0u) return 4;
+                corner = Track_UpdateCornerGate(1u, true, true, true, false);
+                if (corner != 0u) return 5;
+                corner = Track_UpdateCornerGate(0u, true, true, true, true);
+                if (corner != 1u) return 30;
+                if (!Track_CornerCandidateReady(true, true, true, corner, 1u)) return 31;
+                if (Track_CornerCandidateReady(true, false, true, corner, 1u)) return 32;
                 if (Track_CornerArmed(199u, 0u, 0u, 0u, 200u, 300u)) return 6;
                 if (!Track_CornerArmed(200u, 0u, 0u, 0u, 200u, 300u)) return 7;
                 if (Track_CornerArmed(499u, 0u, 300u, 1u, 200u, 300u)) return 8;
                 if (!Track_CornerArmed(600u, 0u, 300u, 1u, 200u, 300u)) return 9;
-                if (Track_WhiteCornerFallbackReady(1u, 2u, 100u, 90u, 100u)) return 10;
-                if (Track_WhiteCornerFallbackReady(2u, 1u, 100u, 90u, 100u)) return 11;
-                if (!Track_WhiteCornerFallbackReady(2u, 2u, 100u, 90u, 100u)) return 12;
-                if (Track_WhiteCornerFallbackReady(2u, 2u, 201u, 100u, 100u)) return 13;
-                if (!Track_WhiteCornerFallbackReady(2u, 2u, 9u, UINT32_MAX - 10u, 100u)) return 14;
+                if (Track_WhiteCornerFallbackReady(1u, 2u, 2u, 100u, 90u, 100u)) return 10;
+                if (Track_WhiteCornerFallbackReady(2u, 1u, 2u, 100u, 90u, 100u)) return 11;
+                if (!Track_WhiteCornerFallbackReady(2u, 2u, 2u, 100u, 90u, 100u)) return 12;
+                if (Track_WhiteCornerFallbackReady(2u, 2u, 2u, 201u, 100u, 100u)) return 13;
+                if (!Track_WhiteCornerFallbackReady(2u, 2u, 2u, 9u, UINT32_MAX - 10u, 100u)) return 14;
+                if (Track_CornerTurnSign(TRACK_LINE_LEFT_CORNER) != 1) return 15;
+                if (Track_CornerTurnSign(TRACK_LINE_RIGHT_CORNER) != -1) return 16;
+                if (Track_CornerTurnSign(TRACK_LINE_NORMAL) != 0) return 17;
+                if (Track_CornerDirectionFromMask(0x1Fu) != 1) return 18;
+                if (Track_CornerDirectionFromMask(0x78u) != -1) return 19;
+                if (Track_CornerDirectionFromMask(0x1Cu) != 0) return 20;
+                if (Track_CornerDirectionFromMask(0x38u) != 0) return 21;
+                if (Track_CornerDirectionFromMask(0xFFu) != 0) return 22;
+                if (Track_CornerDirectionFromMask(0x8Du) != 0) return 23;
+                if (Track_CornerDirectionFromMask(0x09u) != 0) return 28;
+                if (Track_CornerDirectionFromMask(0x90u) != 0) return 29;
+                if (Track_CornerDirectionFromMask(0x0Du) != 0) return 30;
+                if (Track_CornerDirectionFromMask(0xB0u) != 0) return 31;
+                if (Track_CornerDirectionFromMask(0x37u) != 1) return 32;
+                if (Track_CornerDirectionFromMask(0xECu) != -1) return 33;
+                if (!Track_CornerEvidenceRecent(-1, 20u, UINT32_MAX - 10u, 32u)) return 24;
+                if (Track_CornerEvidenceRecent(0, 20u, 10u, 32u)) return 25;
+                if (Track_CornerEvidenceRecent(1, 50u, 10u, 32u)) return 26;
+                if (Track_CenteredEvidenceRecent(false, 20u, 10u, 32u)) return 34;
+                if (!Track_CenteredEvidenceRecent(true, 20u, 10u, 32u)) return 35;
+                if (Track_CenteredEvidenceRecent(true, 50u, 10u, 32u)) return 36;
+                if (!Track_CenteredEvidenceRecent(true, 9u, UINT32_MAX - 10u, 32u)) return 37;
+                if (!Track_CornerArmed(600u, 0u, 300u, 256u, 200u, 300u)) return 27;
                 for (int i = 0; i < 2; ++i) {
                     capture = Track_UpdateConfirmFrames(
                         capture, Track_CaptureLineValid(good, 1.0f));
@@ -115,6 +150,70 @@ class TrackLogicTests(unittest.TestCase):
                 capture = Track_UpdateConfirmFrames(
                     capture, Track_CaptureLineValid(bad, 1.0f));
                 if (capture != 0u) return 5;
+                return 0;
+            }
+            '''
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+    def test_ccw_corner_gate_sequences_do_not_latch_stale_candidates(self):
+        result = compile_and_run(
+            r'''
+            #include <stdbool.h>
+            #include <stddef.h>
+            #include <stdint.h>
+            #include "TASK/track_logic.h"
+
+            static int run_sequence(const uint8_t *masks, size_t count,
+                                    bool corner_armed) {
+                uint8_t centered = 0u;
+                uint8_t confirm = 0u;
+                bool centered_recent = false;
+                bool line_follow = true;
+                int triggers = 0;
+
+                for (size_t i = 0u; i < count; ++i) {
+                    track_line_observation_t observation =
+                        Track_ClassifyLine8(masks[i], 0.0f, 4u);
+                    if (!line_follow) continue;
+                    if (observation.type == TRACK_LINE_NORMAL) {
+                        centered = Track_UpdateConfirmFrames(
+                            centered, Track_Abs_Float(observation.error) <= 0.75f);
+                        if (centered >= 2u) centered_recent = true;
+                        confirm = 0u;
+                        continue;
+                    }
+                    centered = 0u;
+                    confirm = Track_UpdateCornerGate(
+                        confirm, Track_SquareCornerEvidence(masks[i], 4u),
+                        true, corner_armed, centered_recent);
+                    if (Track_CornerCandidateReady(
+                            true, corner_armed, centered_recent, confirm, 1u)) {
+                        ++triggers;
+                        line_follow = false;
+                    }
+                }
+                return triggers;
+            }
+
+            int main(void) {
+                const uint8_t with_white[] = {0x18u, 0x18u, 0x04u, 0x00u,
+                                              0x00u, 0x87u, 0x87u};
+                const uint8_t direct[] = {0x18u, 0x18u, 0x04u, 0x87u};
+                uint8_t confirm = 0u;
+                if (run_sequence(with_white, sizeof(with_white), true) != 1) return 1;
+                if (run_sequence(direct, sizeof(direct), true) != 1) return 2;
+                if (run_sequence(direct, sizeof(direct), false) != 0) return 3;
+
+                /* A candidate seen while disarmed cannot be carried across the
+                 * retrigger guard, and expired centered evidence cannot reopen it. */
+                confirm = Track_UpdateCornerGate(0u, true, true, false, true);
+                if (confirm != 0u) return 4;
+                confirm = Track_UpdateCornerGate(confirm, true, true, true, false);
+                if (confirm != 0u) return 5;
+                if (Track_CornerCandidateReady(true, true, false, 1u, 1u)) return 6;
+                if (Track_SquareCornerEvidence(0x00u, 4u)) return 7;
+                if (Track_SquareCornerEvidence(0xFFu, 4u)) return 8;
                 return 0;
             }
             '''
@@ -143,36 +242,17 @@ class TrackLogicTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
-    def test_all_eight_calibration_channels_must_have_contrast(self):
-        result = compile_and_run(
-            r'''
-            #include "BSP/Inc/bsp_grayscale.h"
-
-            int main(void) {
-                uint16_t white[8] = {1200,1200,1200,1200,1200,1200,1200,1200};
-                uint16_t black[8] = {400,400,400,400,400,400,400,400};
-                if (!Bsp_Grayscale_ContrastValid8(white, black, 200u)) return 1;
-                black[6] = 1050u;
-                if (Bsp_Grayscale_ContrastValid8(white, black, 200u)) return 2;
-                black[6] = 1400u;
-                if (!Bsp_Grayscale_ContrastValid8(white, black, 200u)) return 3;
-                return 0;
-            }
-            '''
-        )
-        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-
     def test_periodic_logs_are_gated_by_motion_state(self):
         source = (ROOT / "main.c").read_text(encoding="utf-8")
         vehicle_log = source.split("static void Main_LogVehicleStatus", 1)[1].split(
-            "static void Main_LogGrayscale", 1
+            "static void Main_LogPathFish", 1
         )[0]
-        grayscale_log = source.split("static void Main_LogGrayscale", 1)[1].split(
-            "static void Main_HandleKeyPush", 1
+        sensor_log = source.split("static void Main_LogPathFish", 1)[1].split(
+            "static void Main_UpdateOled", 1
         )[0]
 
         self.assertIn("if (!Track_State_Allows_Motor(Track.state)) return;", vehicle_log)
-        self.assertIn("if (!Track_State_Is_LineTracking(Track.state)) return;", grayscale_log)
+        self.assertIn("if (!Track_State_Is_LineTracking(Track.state)) return;", sensor_log)
 
     def test_safety_health_ignores_heartbeat_and_keeps_sensor_faults(self):
         result = compile_and_run(
@@ -183,12 +263,12 @@ class TrackLogicTests(unittest.TestCase):
             int main(void) {
                 safety_health_t h = {0};
                 if (Safety_Logic_Check(200u, &h, 50u) != SAFETY_LOGIC_OK) return 1;
-                h.grayscale_required = true;
-                h.grayscale_seen = true;
-                h.last_grayscale_tick = UINT32_MAX - 10u;
+                h.path_fish_required = true;
+                h.path_fish_seen = true;
+                h.last_path_fish_tick = UINT32_MAX - 10u;
                 if (Safety_Logic_Check(9u, &h, 50u) != SAFETY_LOGIC_OK) return 7;
-                if (Safety_Logic_Check(50u, &h, 50u) != SAFETY_LOGIC_GRAYSCALE_EXPIRED) return 8;
-                h.grayscale_required = false;
+                if (Safety_Logic_Check(50u, &h, 50u) != SAFETY_LOGIC_PATH_FISH_EXPIRED) return 8;
+                h.path_fish_required = false;
                 h.sensor_abnormal = true;
                 if (Safety_Logic_Check(50u, &h, 50u) != SAFETY_LOGIC_SENSOR_ABNORMAL) return 2;
                 if (!Safety_Logic_CanEnterRotation(0u) ||
@@ -293,7 +373,7 @@ class TrackLogicTests(unittest.TestCase):
         self.assertIn('find_bool(json, "lifted", &lifted)', tuning_source)
         self.assertIn('Track_Motor_Test_End("stopped")', track_source)
 
-    def test_motion_rejections_are_specific_and_faults_auto_recover(self):
+    def test_motion_rejections_are_specific_and_sensor_faults_latch(self):
         tuning_source = (ROOT / "APP" / "Src" / "app_tuning.c").read_text(
             encoding="utf-8"
         )
@@ -308,15 +388,17 @@ class TrackLogicTests(unittest.TestCase):
         )[0]
 
         self.assertNotIn("safety_not_ready", tuning_source)
-        self.assertIn('"grayscale_not_ready"', tuning_source)
+        self.assertIn('"path_fish_not_ready"', tuning_source)
         self.assertNotIn('"link_not_ready"', tuning_source)
         self.assertNotIn("Safety_ArmRemoteMotion", tuning_source)
         self.assertNotIn("Safety_DisarmRemoteMotion", tuning_source)
         self.assertIn('"motion_busy"', tuning_source)
         self.assertIn("SAFETY_STATE_BOOT", motor_start)
-        self.assertIn('elog_w("MOTION", "motion stopped: %s (auto recovery)"',
-                      safety_source)
-        self.assertIn("Safety_ClearFault();", main_source)
+        self.assertIn("SAFETY_FAULT_PATH_FISH_EXPIRED", safety_source)
+        fault_branch = main_source.split(
+            "} else if (Safety_GetState() == SAFETY_STATE_FAULT)", 1
+        )[1].split("static void Main_LogVehicleStatus", 1)[0]
+        self.assertNotIn("Safety_ClearFault();", fault_branch)
 
         common_header = (ROOT / "APP" / "Inc" / "app_common.h").read_text(
             encoding="utf-8"
@@ -345,30 +427,59 @@ class TrackLogicTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
-    def test_square_corner_accepts_only_counterclockwise_left_chain(self):
+    def test_square_corner_detection_uses_12_bit_count_and_fixed_left_turn(self):
         result = compile_and_run(
             r'''
             #include <stdbool.h>
             #include "TASK/track_logic.h"
 
             int main(void) {
-                if (Track_SquareLeftCorner(0x03u, 3u)) return 1;
-                if (Track_SquareLeftCorner(0x18u, 3u)) return 2;
-                /* 0x0E=S1/S2/S3: captured real-car straight-line drift. */
-                if (Track_SquareLeftCorner(0x0Eu, 3u)) return 3;
-                if (Track_SquareLeftCorner(0x70u, 3u)) return 4;
-                if (Track_SquareLeftCorner(0xFFu, 3u)) return 5;
-                if (!Track_SquareLeftCorner(0x1Eu, 4u)) return 6;
-                if (!Track_SquareLeftCorner(0x1Fu, 4u)) return 7;
-                if (Track_SquareLeftCorner(0x1Eu, 5u)) return 8;
-                /* Real-car L-corner masks: split branch + incoming line. */
-                if (!Track_SquareLeftCorner(0x09u, 4u)) return 9;
-                if (!Track_SquareLeftCorner(0x0Du, 4u)) return 10;
-                if (!Track_SquareLeftCorner(0x0Fu, 4u)) return 11;
-                /* S0 without the incoming-line anchor, and 0x0E without S0,
-                 * must remain rejected. */
-                if (Track_SquareLeftCorner(0x01u, 4u)) return 12;
-                if (Track_SquareLeftCorner(0x0Eu, 4u)) return 13;
+                if (Track_SquareCornerEvidence12(0x01Fu, 6u)) return 1;
+                if (!Track_SquareCornerEvidence12(0x03Fu, 6u)) return 2;
+                if (!Track_SquareCornerEvidence12(0xFC0u, 6u)) return 3;
+                if (Track_SquareCornerEvidence12(0xFFFu, 6u)) return 4;
+                if (Track_SquareCornerEvidence12(0x000u, 6u)) return 5;
+                if (!Track_SquareCornerEvidence12(0x3FFu, 10u)) return 6;
+                if (Track_SquareCornerEvidence12(0x1FFu, 10u)) return 7;
+                if (Track_ClassifyLine12(0x03Fu, 0.0f, 6u).type !=
+                    TRACK_LINE_LEFT_CORNER) return 8;
+                if (Track_ClassifyLine12(0xFC0u, 0.0f, 6u).type !=
+                    TRACK_LINE_LEFT_CORNER) return 9;
+                if (Track_CornerTurnSign(TRACK_LINE_LEFT_CORNER) != 1) return 10;
+                return 0;
+            }
+            '''
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+    def test_all_masks_preserve_left_right_mirror_invariants(self):
+        result = compile_and_run(
+            r'''
+            #include "TASK/track_logic.h"
+
+            static uint16_t mirror12(uint16_t mask) {
+                uint16_t mirror = 0u;
+                for (uint8_t bit = 0u; bit < 12u; bit++) {
+                    if ((mask & (uint16_t)(1u << bit)) != 0u) {
+                        mirror |= (uint16_t)(1u << (11u - bit));
+                    }
+                }
+                return mirror;
+            }
+
+            int main(void) {
+                for (uint16_t mask = 0u; mask <= 0x0FFFu; mask++) {
+                    uint16_t mirror = mirror12(mask);
+                    track_line_observation_t a =
+                        Track_ClassifyLine12(mask, 0.0f, 6u);
+                    track_line_observation_t b =
+                        Track_ClassifyLine12(mirror, 0.0f, 6u);
+                    if (mirror12(mirror) != mask) return 1;
+                    if (Track_CountBits12(mask) != Track_CountBits12(mirror)) return 2;
+                    if (a.type != b.type) return 3;
+                    if (a.type == TRACK_LINE_NORMAL && b.type == TRACK_LINE_NORMAL &&
+                        Track_Abs_Float(a.error + b.error) > 0.001f) return 4;
+                }
                 return 0;
             }
             '''
@@ -406,24 +517,30 @@ class TrackLogicTests(unittest.TestCase):
         )[0]
         self.assertNotIn("case TRACK_STATE_START_LINE", update_switch)
         self.assertNotIn("case TRACK_STATE_CROSS", update_switch)
-        timeout = source.split('APP_TRACK_LOG_W("TRACK", "CORNER_RETRY capture_timeout', 1)[0].rsplit(
-            "if (Track_Timeout_Reached(now, Track.corner_started_at", 1
-        )[1]
+        timeout = source.rsplit(
+            "if (Track_Timeout_Reached(now, Track.state_timer", 1
+        )[1].split("/* 正方形计圈", 1)[0]
         self.assertNotIn("right_angle_count++", timeout)
         self.assertNotIn("Track.state = TRACK_STATE_FINISHED;", timeout)
         self.assertNotIn("Track_Motor_Stop_Immediate();", timeout)
         self.assertIn("Track.corner_phase == TRACK_CORNER_PIVOT", source)
-        self.assertIn('CORNER_RETRY pivot_timeout keep_pivot', source)
-        self.assertIn('CORNER_RETRY capture_timeout keep_capture', source)
-        self.assertIn("turned_abs >= TRACK_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG &&", source)
+        self.assertIn('CORNER_RETRY phase=pivot', source)
+        self.assertIn('CORNER_REPIVOT reason=capture_timeout', source)
+        self.assertIn('CORNER_REPIVOT reason=pose', source)
+        self.assertIn("turn_progress >= TRACK_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG &&", source)
         self.assertIn("Track_EncoderDistanceReached", source)
         self.assertNotIn("CORNER_FAIL reason=approach_cal_missing", source)
         self.assertIn("Track.corner_phase = TRACK_CORNER_APPROACH;", source)
         self.assertIn("TRACK_RIGHT_ANGLE_APPROACH_FALLBACK_MS", source)
-        self.assertIn('Track_BeginRightAngle(now, digital_mask, "mask");', source)
-        self.assertIn('Track_BeginRightAngle(now, digital_mask, "white");', source)
-        self.assertIn("Track.line_mask_history = (Track.line_mask_history << 8)", source)
+        self.assertIn("Track_SquareCornerEvidence12", source)
+        self.assertIn("Track_BeginRightAngle(now, digital_mask, trigger, 1);", source)
+        self.assertIn("((Track.line_mask_history << 12) | Track.line_mask)", source)
         self.assertIn("Track_Apply_Rotate_Envelope(angle_error, Imu_Sensor.gyro_z);", source)
+        self.assertIn("Track_Handle_RightAngle(observation, line_frame_fresh);", source)
+        self.assertIn("Track_CornerCapturePoseValid", source)
+        self.assertIn("encoder_distance_reached || approach_time_reached", source)
+        self.assertIn("Path_Fish_TakeFault()", source)
+        self.assertIn("SENSOR_BAD reason=path_fish_transport", source)
         self.assertNotIn("Track_RightAngle_PivotPwm", source)
         self.assertIn("if (!pivot_turn) {", source)
         self.assertNotIn("USER_RIGHT_ANGLE_APPROACH_MS", source)
@@ -437,7 +554,7 @@ class TrackLogicTests(unittest.TestCase):
         self.assertNotIn("Safety_TransitionToFinished", completion)
         self.assertIn("LAP_TARGET_REACHED", completion)
 
-    def test_line_lost_does_not_stop_and_manual_stop_returns_ready(self):
+    def test_line_lost_recovers_for_150ms_then_faults_and_manual_stop_clears(self):
         track_source = (ROOT / "TASK" / "track.c").read_text(encoding="utf-8")
         detect = track_source.split("static void Track_Detect_Pattern", 1)[1].split(
             "static void Track_Motor_Stop_Immediate", 1
@@ -446,15 +563,17 @@ class TrackLogicTests(unittest.TestCase):
             "bool Track_Start_Rotation", 1
         )[0]
         self.assertNotIn("Track.state = TRACK_STATE_LINE_LOST", detect)
-        self.assertNotIn("LINE_FAIL reason=lost", detect)
-        self.assertNotIn("LINE_FAIL reason=invalid", detect)
-        self.assertNotIn("Track_Handle_LineLost", track_source)
+        self.assertIn("USER_LINE_LOST_RECOVERY_MS", detect)
+        self.assertIn("Safety_NotifyLineLostTimeout();", detect)
+        self.assertIn('"white_gap"', detect)
         line_follow = track_source.split("case TRACK_STATE_LINE_FOLLOW:", 1)[1].split(
             "case TRACK_STATE_RIGHT_ANGLE:", 1
         )[0]
         self.assertNotIn("invalid_line_confirm", line_follow)
         self.assertNotIn("Track.target_speed = 0", line_follow)
         self.assertNotIn("Track.base_speed = 0", line_follow)
+        self.assertIn("Track_LimitRecoveryError", line_follow)
+        self.assertIn("previous_line_type != TRACK_LINE_NORMAL", track_source)
         self.assertLess(
             stop.index("Safety_TransitionToFinished();"),
             stop.index("Safety_TransitionToReady();"),
@@ -469,19 +588,21 @@ class TrackLogicTests(unittest.TestCase):
         )[0]
         self.assertNotIn("SAFETY_STATE_FINISHED", start)
 
-    def test_start_does_not_reject_current_line_pattern_and_result_is_acked(self):
+    def test_start_requires_fresh_centered_path_fish_and_result_is_acked(self):
         track_source = (ROOT / "TASK" / "track.c").read_text(encoding="utf-8")
         start = track_source.split("bool Track_Start(void)", 1)[1].split(
             "void Track_Stop(void)", 1
         )[0]
-        self.assertNotIn("Track_StartPatternValid", start)
-        self.assertNotIn("invalid_start_pattern", start)
+        self.assertIn("Path_Fish_IsFresh(now)", start)
+        self.assertIn("Safety_PathFishReady()", start)
+        self.assertIn("start_line.type != TRACK_LINE_NORMAL", start)
+        self.assertIn('s_track_start_result = "path_fish_not_centered"', start)
         self.assertLess(
             start.index("Track_Imu_Healthy"),
             start.index("Safety_TransitionToRunning"),
         )
         self.assertLess(
-            start.index("Grayscale_Calibration_Valid"),
+            start.index("Path_Fish_IsFresh"),
             start.index("Safety_TransitionToRunning"),
         )
 
@@ -542,18 +663,70 @@ class TrackLogicTests(unittest.TestCase):
                 if (Track_Rotate_ShouldCoast(5.0f, -1.0f, 3.5f, 4.0f)) return 15;
                 if (Track_Rotate_ShouldCoast(5.0f, 0.0f, 3.5f, 4.0f)) return 16;
                 if (Track_Rotate_ShouldCoast(5.0f, 8.0f, 4.0f, 4.0f)) return 17;
-                if (Track_CaptureBlendTurn(0.0f, -1.5f, true, 3.5f, 8.0f) != -5.25f) return 18;
-                if (Track_CaptureBlendTurn(2.0f, -3.5f, true, 3.5f, 8.0f) != -8.0f) return 19;
-                if (Track_CaptureBlendTurn(2.0f, -3.5f, false, 3.5f, 8.0f) != 2.0f) return 20;
-                if (Track_RightAngle_HybridHandoff(69.0f, 0.0f, 2u, 70.0f, 82.0f, 25.0f, 2u)) return 21;
-                if (Track_RightAngle_HybridHandoff(75.0f, 0.0f, 1u, 70.0f, 82.0f, 25.0f, 2u)) return 22;
-                if (!Track_RightAngle_HybridHandoff(75.0f, 20.0f, 2u, 70.0f, 82.0f, 25.0f, 2u)) return 23;
-                if (!Track_RightAngle_HybridHandoff(82.0f, 20.0f, 0u, 70.0f, 82.0f, 25.0f, 2u)) return 24;
-                if (Track_RightAngle_HybridHandoff(90.0f, 30.0f, 2u, 70.0f, 82.0f, 25.0f, 2u)) return 25;
+                if (Track_CaptureBlendTurn(0.0f, -1.5f, true, 3.5f, 3.0f, 8.0f) != -3.0f) return 18;
+                if (Track_CaptureBlendTurn(2.0f, -3.5f, true, 3.5f, 3.0f, 8.0f) != -1.0f) return 19;
+                if (Track_CaptureBlendTurn(2.0f, -3.5f, false, 3.5f, 3.0f, 8.0f) != 2.0f) return 20;
+                if (Track_RightAngle_HybridHandoff(69.0f, 21.0f, 0.0f, 2u, 70.0f, 82.0f, 20.0f, 12.0f, 25.0f, 2u)) return 21;
+                if (Track_RightAngle_HybridHandoff(75.0f, 15.0f, 0.0f, 1u, 70.0f, 82.0f, 20.0f, 12.0f, 25.0f, 2u)) return 22;
+                if (!Track_RightAngle_HybridHandoff(75.0f, 15.0f, 20.0f, 2u, 70.0f, 82.0f, 20.0f, 12.0f, 25.0f, 2u)) return 23;
+                if (!Track_RightAngle_HybridHandoff(82.0f, 8.0f, 20.0f, 0u, 70.0f, 82.0f, 20.0f, 12.0f, 25.0f, 2u)) return 24;
+                if (Track_RightAngle_HybridHandoff(90.0f, 0.0f, 30.0f, 2u, 70.0f, 82.0f, 20.0f, 12.0f, 25.0f, 2u)) return 25;
+                if (Track_RightAngle_HybridHandoff(-90.0f, 180.0f, 0.0f, 2u, 70.0f, 82.0f, 20.0f, 12.0f, 25.0f, 2u)) return 26;
+                if (Track_CornerTargetHeading(10.0f, 1, 90.0f) != 100.0f) return 27;
+                if (Track_CornerTargetHeading(10.0f, -1, 90.0f) != -80.0f) return 28;
+                if (Track_CornerTargetHeading(10.0f, -1, -90.0f) != -80.0f) return 29;
+                if (Track_CornerTurnProgress(10.0f, 95.0f, 1) != 85.0f) return 30;
+                if (Track_CornerTurnProgress(10.0f, -75.0f, -1) != 85.0f) return 31;
+                if (Track_CornerTurnProgress(10.0f, 95.0f, -1) >= 0.0f) return 32;
+                if (Track_CornerCapturePoseValid(70.0f, 20.0f, 82.0f, 12.0f)) return 33;
+                if (!Track_CornerCapturePoseValid(82.0f, 8.0f, 82.0f, 12.0f)) return 34;
+                if (Track_CornerCapturePoseValid(450.0f, -360.0f, 82.0f, 12.0f)) return 35;
+                if (!Track_CornerCapturePoseValid(70.0f, 20.0f, 70.0f, 20.0f)) return 36;
+                if (Track_CornerCapturePoseValid(450.0f, -360.0f, 70.0f, 20.0f)) return 37;
+                if (Track_CaptureHeadingPriority(8.0f, -1.0f, 2.0f, 3.0f) != -1.0f) return 38;
+                if (Track_CaptureHeadingPriority(-8.0f, 1.0f, -2.0f, 3.0f) != 1.0f) return 39;
+                if (Track_CaptureHeadingPriority(2.0f, -1.0f, 2.0f, 3.0f) != 2.0f) return 40;
+                if (Track_CaptureHeadingPriority(8.0f, -1.0f, 0.0f, 3.0f) != -1.0f) return 41;
+                if (Track_CaptureHeadingPriority(-8.0f, 1.0f, 0.0f, 3.0f) != 1.0f) return 42;
+                if (Track_RightAngle_HybridHandoff(110.0f, -20.0f, 0.0f, 0u, 70.0f, 82.0f, 20.0f, 12.0f, 25.0f, 2u)) return 43;
+                if (!Track_RightAngle_HybridHandoff(110.0f, -20.0f, 0.0f, 2u, 70.0f, 82.0f, 20.0f, 12.0f, 25.0f, 2u)) return 44;
+                if (Track_RightAngle_HybridHandoff(450.0f, -360.0f, 0.0f, 2u, 70.0f, 82.0f, 20.0f, 12.0f, 25.0f, 2u)) return 45;
+                if (!Track_Rotate_StallCandidate(10.0f, 0.0f, 0, 0, 6.0f, 15.0f, 2.0f, 1)) return 46;
+                if (!Track_Rotate_StallCandidate(-10.0f, 0.0f, -1, 1, 6.0f, 15.0f, 2.0f, 1)) return 47;
+                if (Track_Rotate_StallCandidate(4.0f, 0.0f, 0, 0, 6.0f, 15.0f, 2.0f, 1)) return 48;
+                if (Track_Rotate_StallCandidate(16.0f, 0.0f, 0, 0, 6.0f, 15.0f, 2.0f, 1)) return 49;
+                if (Track_Rotate_StallCandidate(10.0f, 2.1f, 0, 0, 6.0f, 15.0f, 2.0f, 1)) return 50;
+                if (Track_Rotate_StallCandidate(10.0f, 0.0f, 2, 0, 6.0f, 15.0f, 2.0f, 1)) return 51;
+                if (Track_Rotate_RecoveryMoving(4.0f, 1, -1, 4.0f, 1)) return 52;
+                if (!Track_Rotate_RecoveryMoving(4.1f, 0, 0, 4.0f, 1)) return 53;
+                if (!Track_Rotate_RecoveryMoving(0.0f, 2, 0, 4.0f, 1)) return 54;
                 Track_Rotate_Command(90.0f, 30, &left, &right);
                 if (left >= 0 || right <= 0) return 7;
                 Track_Rotate_Command(-90.0f, 30, &left, &right);
                 return (left > 0 && right < 0) ? 0 : 8;
+            }
+            '''
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+    def test_square_course_corner_direction_is_always_counter_clockwise(self):
+        result = compile_and_run(
+            r'''
+            #include "TASK/track_logic.h"
+
+            int main(void) {
+                const float entry = 10.0f;
+                int8_t left_mask_sign = Track_CornerTurnSign(
+                    Track_ClassifyLine12(0x03Fu, 0.0f, 6u).type);
+                int8_t right_mask_sign = Track_CornerTurnSign(
+                    Track_ClassifyLine12(0xFC0u, 0.0f, 6u).type);
+                float left_target =
+                    Track_CornerTargetHeading(entry, left_mask_sign, 90.0f);
+                float right_target =
+                    Track_CornerTargetHeading(entry, right_mask_sign, 90.0f);
+                if (left_mask_sign != 1 || right_mask_sign != 1) return 1;
+                if (left_target != 100.0f || right_target != 100.0f) return 2;
+                return 0;
             }
             '''
         )
@@ -589,6 +762,11 @@ class TrackLogicTests(unittest.TestCase):
         self.assertIn("USER_ROTATE_PID_BLEND_ZONE_DEG   25.0f", tuning)
         self.assertIn("USER_ROTATE_PID_FINE_MAX_SPEED    7.0f", tuning)
         self.assertIn("USER_ROTATE_PID_COAST_OUTPUT    4.0f", tuning)
+        self.assertIn("USER_ROTATE_STALL_KICK_SPEED    20", tuning)
+        self.assertIn("USER_ROTATE_STALL_CONFIRM_FRAMES 20u", tuning)
+        self.assertIn("USER_ROTATE_STALL_MIN_ERROR_DEG   6.0f", tuning)
+        self.assertIn("USER_ROTATE_STALL_MAX_ERROR_DEG  15.0f", tuning)
+        self.assertIn("USER_ROTATE_STALL_KICK_HOLD_FRAMES 20u", tuning)
         self.assertIn("USER_RIGHT_ANGLE_APPROACH_SPEED  28", tuning)
         self.assertIn("USER_RIGHT_ANGLE_CONFIRM_FRAMES 1", tuning)
         self.assertIn("USER_RIGHT_ANGLE_WHITE_FALLBACK_FRAMES 2u", tuning)
@@ -703,16 +881,19 @@ class TrackLogicTests(unittest.TestCase):
             update.index("if (!motor->use_speed_pid) return;"),
         )
 
-    def test_white_frames_keep_following_without_counting_a_corner(self):
+    def test_white_frames_never_stop_or_start_corner(self):
         source = (ROOT / "TASK" / "track.c").read_text(encoding="utf-8")
         detect = source.split("static void Track_Detect_Pattern", 1)[1].split(
             "static void Track_Motor_Stop_Immediate", 1
         )[0]
-        self.assertIn("TRACK_RIGHT_ANGLE_WHITE_FALLBACK_FRAMES", detect)
         self.assertNotIn("TRACK_LINE_LOST_CONFIRM_FRAMES", detect)
         self.assertNotIn("Track.state = TRACK_STATE_LINE_LOST;", detect)
         self.assertNotIn("Track.state = TRACK_STATE_FINISHED;", detect)
         self.assertNotIn("Track_Handle_LineLost", source)
+        self.assertIn("Track_CenteredEvidenceRecent", detect)
+        self.assertNotIn('Track_BeginRightAngle(now, digital_mask, "white", 1);', detect)
+        self.assertIn("Track_UpdateCornerGate", detect)
+        self.assertNotIn("TRACK_LINE_RIGHT_CORNER", detect)
 
     def test_rotate_timeout_is_wrap_safe(self):
         result = compile_and_run(

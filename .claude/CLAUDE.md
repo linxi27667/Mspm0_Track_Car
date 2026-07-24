@@ -76,3 +76,11 @@ python host\simulator.py
 - Corner motion is non-blocking: encoder-distance approach with entry-heading hold, 100 ms stop, IMU +90 degree pivot, then three consecutive normal centered capture frames. Only a successful capture increments the corner count.
 - `USER_ENCODER_LEFT_COUNTS_PER_MM`, `USER_ENCODER_RIGHT_COUNTS_PER_MM`, and `USER_SENSOR_TO_AXLE_MM` intentionally default to zero. Straight tracking remains available, but corner entry fails safe with `approach_cal_missing` until all physical values are measured and compiled in.
 - READY requires every grayscale channel to have at least 200 ADC counts between wide-white and wide-black calibration. Line tracking defaults to direct PWM; `USER_TRACK_SPEED_PID_ENABLE` is enabled only after independent left/right wheel calibration.
+
+## Board 1.0 I/O Map
+
+- The 2026-07-18 board netlist keeps both motors, both quadrature encoders, the eight-channel grayscale multiplexer, ICM42688 SPI1, ESP-01S UART1, debug UART0, and four active-low keys on their existing pins.
+- PB4 is the only MCU-controlled status LED and is active high. PB5 is no longer LED2; it drives the buzzer transistor and is active high. K1/K2/K3/K4 remain PB15/PB16/PB2/PA30 with pull-ups.
+- Key feedback is non-blocking: ordinary debounced key events request one 60 ms beep; K3/K4 calibration actions and K3 long motor-scale calibration request two beeps separated by 60 ms.
+- OLED support is an unbound SSD1306-compatible 128x64 transport abstraction. It must not use the legacy PB8/PB9 software-I2C binding because those pins are ICM42688 MOSI/SCLK. Do not call `App_Oled_Init()` until a new bus is attached.
+- See `docs/board-1.0-pinmap.md` for the full functional map, netlist caveats, and the unresolved active-versus-passive buzzer check.

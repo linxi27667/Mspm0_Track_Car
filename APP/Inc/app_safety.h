@@ -2,8 +2,8 @@
  * @file    app_safety.h
  * @brief   安全状态机 — 唯一授权电机输出的模块。
  *
- *          状态: BOOT → CALIBRATING → READY → RUNNING → FINISHED。
- *          运行期间仅由IMU与灰度传感器故障撤销运动授权。
+ *          状态: BOOT → READY → RUNNING → FINISHED。
+ *          运行期间仅由IMU与鱼眼循迹传感器故障撤销运动授权。
  *
  *          核心原则: Track/PID 可计算期望速度，但电机输出
  *          仅当 Safety_AllowsMotorOutput() 返回 true 时才执行。
@@ -30,8 +30,8 @@ typedef enum {
 /* 故障类型 */
 typedef enum {
     SAFETY_FAULT_NONE = 0,
-    SAFETY_FAULT_GRAYSCALE_EXPIRED,      /* 灰度帧过期 */
-    SAFETY_FAULT_CALIBRATION_INCOMPLETE, /* 校准未完成 */
+    SAFETY_FAULT_PATH_FISH_EXPIRED,      /* 鱼眼完整帧过期 */
+    SAFETY_FAULT_PATH_FISH_NOT_READY,    /* 未获得连续居中的健康线型 */
     SAFETY_FAULT_SENSOR_ABNORMAL,        /* 传感器抬起/异常 */
     SAFETY_FAULT_MANUAL_STOP,            /* 手动停止 */
     SAFETY_FAULT_LINE_LOST_TIMEOUT,      /* 丢线超时 */
@@ -71,18 +71,15 @@ const char *Safety_FaultName(safety_fault_t fault);
  * 传感器健康更新 (由各模块调用)
  * ============================================================ */
 
-/* 更新最近有效灰度帧时间。 */
-void Safety_NotifyGrayscaleFrame(uint32_t tick);
+/* 发布有效鱼眼完整帧，并累计启动所需的连续居中线型。 */
+void Safety_NotifyPathFishFrame(uint32_t tick, bool centered_normal);
+void Safety_ResetPathFishReadiness(void);
+bool Safety_PathFishReady(void);
 
 /* 报告不可继续运动的传感器异常。 */
 void Safety_NotifySensorAbnormal(void);
 
-/* 校准完成通知 */
-void Safety_NotifyCalibrationComplete(void);
-
-/* 校准后尝试推进到 READY（检查 white+black 都完成）
- * 由 K3/K4 校准按键调用，避免 main.c 直接访问 Grayscale_Sensor */
-void Safety_TryAdvanceAfterCalibration(void);
+void Safety_NotifyLineLostTimeout(void);
 
 /* ============================================================
  * 强制停车 — 切断所有电机输出

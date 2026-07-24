@@ -239,7 +239,7 @@ button:disabled {
 .data-field small,
 .telemetry-data-grid dt,
 .telemetry-data-grid small,
-.adc-value span {
+.line-value span {
     color: var(--muted);
     font-size: 11px;
 }
@@ -273,14 +273,14 @@ button:disabled {
     font-weight: 600;
 }
 
-.adc-data-grid {
+.line-data-grid {
     display: grid;
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(12, minmax(0, 1fr));
     border-top: 1px solid var(--line-soft);
     border-left: 1px solid var(--line-soft);
 }
 
-.adc-value {
+.line-value {
     min-width: 0;
     min-height: 58px;
     padding: 8px 10px;
@@ -291,7 +291,7 @@ button:disabled {
     justify-content: space-between;
 }
 
-.adc-value strong {
+.line-value strong {
     color: var(--green);
     font-family: "Cascadia Mono", "Consolas", monospace;
     font-size: 18px;
@@ -937,7 +937,7 @@ button:disabled {
         border-bottom: 1px solid var(--line-soft);
     }
 
-    .adc-data-grid {
+    .line-data-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 

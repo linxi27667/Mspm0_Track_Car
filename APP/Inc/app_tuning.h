@@ -19,8 +19,9 @@
  *            log   — {"v":1,"t":"log","msg":"..."}
  *
  *          安全:
- *            - TUNING 模式: 需 auth 认证, 100ms 心跳, RUNNING 时 500ms 无心跳即停车
- *            - RACE 模式: 编译禁用入站命令处理, ESP 不参与行车
+ *            - TUNING 模式: 入站命令需 auth；心跳和主机连接只用于诊断，
+ *              不参与车辆运动授权
+ *            - RACE 模式: 编译禁用入站命令处理，参数使用固件固化值
  */
 #ifndef APP_TUNING_H
 #define APP_TUNING_H

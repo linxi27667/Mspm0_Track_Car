@@ -100,10 +100,10 @@ class LocalRuleEngine:
         # 规则5: 直角弯频繁触发但未完成 → RATHR 偏小
         ra_count = sum(1 for s in states if s == "RA")
         if ra_count > n * 0.15:
-            new_rathr = clamp("RATHR", current.get("RATHR", PARAMS["RATHR"]["default"]) + 0.3)
+            new_rathr = clamp("RATHR", current.get("RATHR", PARAMS["RATHR"]["default"]) + 1.0)
             triggered.append((
                 {"RATHR": new_rathr},
-                f"直角弯频繁触发({ra_count}/{n}帧RA),可能误判,建议RATHR+0.3",
+                f"直角弯频繁触发({ra_count}/{n}帧RA),可能误判,建议RATHR+1",
                 0.4,
             ))
 
@@ -203,7 +203,8 @@ class GlmEngine:
         return f"""你是循迹小车 PID 调参专家。根据遥测数据给出参数调整建议。
 
 遥测字段说明：
-  adc: 8路灰度ADC原始值（0~4095）
+  line: 12路鱼眼数字黑线位（A1左到A12右，0/1）
+  lm/bc/sa/se/bp: 12位mask、黑点数、完整帧龄、通信错误数、黑线极性
   gz: 陀螺仪Z轴角速度（deg/s）
   el/er: 左/右编码器速度
   le: 循迹误差（正=偏左,负=偏右,0=居中）
@@ -218,7 +219,7 @@ class GlmEngine:
   2. 误差持续偏大（|le|>2）→ KP 偏小，加大 20%
   3. 直道抖动（gz 波动大）→ GDAMP 偏小，+0.05
   4. 弯道冲出（频繁 LL）→ VCUR 偏大，-5
-  5. 直角弯误判 → RATHR +0.3
+  5. 直角弯误判 → RATHR +1
 
 只输出 JSON，不要多余文字。格式：
 {{"params":{{"KP":6.0}},"reason":"...","confidence":0.7}}

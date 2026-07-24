@@ -455,6 +455,16 @@
               <FilePath>..\APP\Inc\app_led.h</FilePath>
             </File>
             <File>
+              <FileName>app_buzzer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\Src\app_buzzer.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_buzzer.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\APP\Inc\app_buzzer.h</FilePath>
+            </File>
+            <File>
               <FileName>app_uart.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\APP\Src\app_uart.c</FilePath>
@@ -465,14 +475,14 @@
               <FilePath>..\APP\Inc\app_uart.h</FilePath>
             </File>
             <File>
-              <FileName>app_grayscale.c</FileName>
+              <FileName>app_path_fish.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\APP\Src\app_grayscale.c</FilePath>
+              <FilePath>..\APP\Src\app_path_fish.c</FilePath>
             </File>
             <File>
-              <FileName>app_grayscale.h</FileName>
+              <FileName>app_path_fish.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\APP\Inc\app_grayscale.h</FilePath>
+              <FilePath>..\APP\Inc\app_path_fish.h</FilePath>
             </File>
             <File>
               <FileName>app_sw_i2c.c</FileName>
@@ -483,6 +493,16 @@
               <FileName>app_sw_i2c.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\APP\Inc\app_sw_i2c.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_oled.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\Src\app_oled.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_oled.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\APP\Inc\app_oled.h</FilePath>
             </File>
             <File>
               <FileName>app_imu.c</FileName>
@@ -620,6 +640,16 @@
               <FilePath>..\BSP\Inc\bsp_led.h</FilePath>
             </File>
             <File>
+              <FileName>bsp_buzzer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\Src\bsp_buzzer.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_buzzer.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\bsp_buzzer.h</FilePath>
+            </File>
+            <File>
               <FileName>bsp_uart.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BSP\Src\bsp_uart.c</FilePath>
@@ -630,14 +660,14 @@
               <FilePath>..\BSP\Inc\bsp_uart.h</FilePath>
             </File>
             <File>
-              <FileName>bsp_grayscale.c</FileName>
+              <FileName>bsp_path_fish.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\BSP\Src\bsp_grayscale.c</FilePath>
+              <FilePath>..\BSP\Src\bsp_path_fish.c</FilePath>
             </File>
             <File>
-              <FileName>bsp_grayscale.h</FileName>
+              <FileName>bsp_path_fish.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\BSP\Inc\bsp_grayscale.h</FilePath>
+              <FilePath>..\BSP\Inc\bsp_path_fish.h</FilePath>
             </File>
             <File>
               <FileName>bsp_sw_i2c.c</FileName>
@@ -648,6 +678,26 @@
               <FileName>bsp_sw_i2c.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\BSP\Inc\bsp_sw_i2c.h</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_oled.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\Src\bsp_oled.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_oled_font.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\Src\bsp_oled_font.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_oled.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\bsp_oled.h</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_oled_font.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\bsp_oled_font.h</FilePath>
             </File>
             <File>
               <FileName>bsp_icm42688.c</FileName>

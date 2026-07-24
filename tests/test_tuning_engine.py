@@ -126,13 +126,13 @@ class LocalRuleEngineRuleTests(unittest.TestCase):
         self.assertIn("陀螺仪抖动", result["reason"])
 
     def test_rule5_right_angle_frequent_increases_rathr(self):
-        """规则5: 直角弯频繁 (>15% 帧 RA) -> RATHR+0.3。"""
+        """规则5: 直角弯频繁 (>15% 帧 RA) -> RATHR+1。"""
         engine = LocalRuleEngine()
         history = make_history(30, st_fn=lambda i: "RA" if i % 5 == 0 else "LF")
         current = make_current()
         result = engine.analyze(history, current)
         self.assertIn("RATHR", result["params"])
-        expected_rathr = PARAMS["RATHR"]["default"] + 0.3
+        expected_rathr = PARAMS["RATHR"]["default"] + 1.0
         self.assertAlmostEqual(result["params"]["RATHR"], expected_rathr, places=2)
         self.assertIn("直角弯", result["reason"])
 

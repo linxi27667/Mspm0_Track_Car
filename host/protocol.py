@@ -53,13 +53,16 @@ STATE_MAP = {
 }
 
 VALID_CMDS = {
-    "start", "stop", "whitecal", "blackcal", "rotate", "motor_test",
+    "start", "stop", "rotate", "motor_test",
     "heading_hold_on", "heading_hold_off",
 }
 
-_TELEMETRY_REQUIRED = {"t", "adc", "gz", "el", "er", "le", "po", "st", "kp", "kd"}
+_TELEMETRY_REQUIRED = {
+    "t", "line", "lm", "bc", "sa", "se", "bp",
+    "gz", "el", "er", "le", "po", "st", "kp", "kd",
+}
 _TELEMETRY_OPTIONAL = {
-    "v", "seq", "ms", "bc", "ki", "gd", "vb", "vs", "vc", "rt", "drop", "cal",
+    "v", "seq", "ms", "ki", "gd", "vb", "vs", "vc", "rt", "drop",
     "tg", "ta", "te", "rr", "hh", "ht", "ha", "he", "hr",
     "mt", "mph", "mtg", "mlp", "mrp", "mrs",
 }
@@ -269,7 +272,7 @@ def validate_request(obj: dict[str, Any], *, require_id: bool = True) -> dict[st
 
 
 def validate_telemetry(obj: dict[str, Any]) -> dict[str, Any]:
-    """Validate one legacy-or-v1 telemetry object."""
+    """Validate one 12-channel Path Fish telemetry object."""
     if not isinstance(obj, dict):
         raise ProtocolError("telemetry must be an object")
     missing = _TELEMETRY_REQUIRED - set(obj)
@@ -282,11 +285,21 @@ def validate_telemetry(obj: dict[str, Any]) -> dict[str, Any]:
         raise ProtocolError("not a telemetry object")
     _validate_version(obj, optional=True)
 
-    adc = obj["adc"]
-    if not isinstance(adc, list) or len(adc) != 8:
-        raise ProtocolError("adc must contain exactly 8 samples")
-    for index, sample in enumerate(adc):
-        _require_int(f"adc[{index}]", sample, 0, 4095)
+    line = obj["line"]
+    if not isinstance(line, list) or len(line) != 12:
+        raise ProtocolError("line must contain exactly 12 bits")
+    for index, sample in enumerate(line):
+        _require_int(f"line[{index}]", sample, 0, 1)
+    line_mask = _require_int("lm", obj["lm"], 0, 0x0FFF)
+    black_count = _require_int("bc", obj["bc"], 0, 12)
+    expected_mask = sum(bit << index for index, bit in enumerate(line))
+    if line_mask != expected_mask:
+        raise ProtocolError("lm does not match line bits")
+    if black_count != sum(line):
+        raise ProtocolError("bc does not match line bits")
+    _require_int("sa", obj["sa"])
+    _require_int("se", obj["se"])
+    _require_int("bp", obj["bp"], 0, 1)
     _require_number("gz", obj["gz"])
     _require_int("el", obj["el"], -0x80000000, 0x7FFFFFFF)
     _require_int("er", obj["er"], -0x80000000, 0x7FFFFFFF)
@@ -302,10 +315,6 @@ def validate_telemetry(obj: dict[str, Any]) -> dict[str, Any]:
     for field in ("seq", "ms", "drop"):
         if field in obj:
             _require_int(field, obj[field])
-    if "bc" in obj:
-        _require_int("bc", obj["bc"], 0, 8)
-    if "cal" in obj:
-        _require_int("cal", obj["cal"], 0, 3)
     rotation_fields = {"tg", "ta", "te", "rr"}
     present_rotation_fields = rotation_fields & set(obj)
     if present_rotation_fields and present_rotation_fields != rotation_fields:

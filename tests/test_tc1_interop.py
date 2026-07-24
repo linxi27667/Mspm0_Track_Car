@@ -21,8 +21,15 @@ from __future__ import annotations
 
 import binascii
 import json
+import sys
 import unittest
+from pathlib import Path
 from typing import Optional
+
+ROOT = Path(__file__).resolve().parents[1]
+HOST = ROOT / "host"
+if str(HOST) not in sys.path:
+    sys.path.insert(0, str(HOST))
 
 from protocol import (
     FRAME_MAGIC,
@@ -383,7 +390,8 @@ class Tc1GoldenFrameTests(unittest.TestCase):
     def test_telemetry_frame_round_trip(self):
         obj = {
             "v": 1, "t": "tele", "seq": 100, "ms": 5000,
-            "adc": [100, 200, 300, 400, 500, 600, 700, 800],
+            "line": [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+            "lm": 0x060, "bc": 2, "sa": 7, "se": 0, "bp": 1,
             "gz": 1.5, "el": 100, "er": 200, "le": 0.5,
             "po": 30.0, "st": "LF", "kp": 3.0, "kd": 0.5,
         }

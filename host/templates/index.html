@@ -55,8 +55,21 @@
                             <strong id="tele-bc">--</strong>
                         </div>
                         <div class="data-field">
-                            <span>校准状态</span>
-                            <strong id="tele-cal">--</strong>
+                            <span>12 位 mask</span>
+                            <strong id="tele-lm">--</strong>
+                        </div>
+                        <div class="data-field">
+                            <span>鱼眼帧龄</span>
+                            <strong id="tele-sa">--</strong>
+                            <small>ms</small>
+                        </div>
+                        <div class="data-field">
+                            <span>鱼眼错误</span>
+                            <strong id="tele-se">--</strong>
+                        </div>
+                        <div class="data-field">
+                            <span>黑线极性</span>
+                            <strong id="tele-bp">--</strong>
                         </div>
                         <div class="data-field">
                             <span>发送丢弃</span>
@@ -65,12 +78,12 @@
                     </div>
 
                     <section class="data-section">
-                        <h3>8 路灰度 ADC</h3>
-                        <div class="adc-data-grid">
-                            {% for channel in range(8) %}
-                            <div class="adc-value">
-                                <span>AD{{ channel }}</span>
-                                <strong id="tele-adc-{{ channel }}">--</strong>
+                        <h3>12 路鱼眼数字线位（A1 左 → A12 右）</h3>
+                        <div class="line-data-grid">
+                            {% for channel in range(12) %}
+                            <div class="line-value">
+                                <span>A{{ channel + 1 }}</span>
+                                <strong id="tele-line-{{ channel }}">--</strong>
                             </div>
                             {% endfor %}
                         </div>
@@ -133,7 +146,7 @@
                         <div class="param-guide">
                             <h3>这些参数在干什么</h3>
                             <p>
-                                循迹闭环：灰度偏差 <code>le</code>
+                                循迹闭环：12路鱼眼偏差 <code>le</code>
                                 → 线 PID（KP/KI/KD）得到转向
                                 → 再减 <code>GDAMP × 陀螺仪Z</code> 抑制抖动
                                 → 左右轮 ≈ 基础PWM ± 转向。
@@ -146,7 +159,7 @@
                             <p class="param-guide-order">
                                 建议顺序：先 VBASE/VSTR/VCUR 不飞车
                                 → 再 KP → 再 KD → 最后 GDAMP；
-                                KI 保持 0；RATHR 首轮保持 4.0。
+                                KI 保持 0；RATHR 首轮保持 6.0。
                                 改完点「应用参数」，不会自动下发。
                             </p>
                         </div>
@@ -183,10 +196,9 @@
                             <button id="btn-apply" class="btn-primary">应用参数</button>
                             <button id="btn-start" class="btn-success">启动</button>
                             <button id="btn-stop" class="btn-danger">停止</button>
-                            <button id="btn-whitecal">白校准</button>
-                            <button id="btn-blackcal">黑校准</button>
                             <button id="btn-reconnect">重连</button>
                         </div>
+                        <p class="rotate-hint">鱼眼黑白标定在模块板上完成：长按板载K1进入，短按板载K1采白底，短按板载K2采黑线。车载K4仅切换0/1黑线极性。</p>
 
                         <div class="rotate-card motor-test-card">
                             <div class="rotate-card-head">
@@ -214,7 +226,7 @@
                                 <input id="rotate-deg" type="number" min="-180" max="180" step="1" value="90">
                                 <button id="btn-rotate-custom">按设定角度旋转</button>
                             </div>
-                            <p class="rotate-hint">正数左转，负数右转；无需灰度校准，但 MPU 静止校准完成后才可执行。</p>
+                            <p class="rotate-hint">正数左转，负数右转；不依赖鱼眼，但 MPU 静止校准完成后才可执行。</p>
                             <div class="heading-hold-control">
                                 <button id="btn-heading-hold" class="btn-secondary">保持当前角度</button>
                                 <span id="heading-hold-status" class="rotate-status">未开启</span>

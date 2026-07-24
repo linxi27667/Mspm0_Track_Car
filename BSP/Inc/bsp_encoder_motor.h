@@ -9,11 +9,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* --- 抽象 GPIO 对象 --- */
+/* --- AT8236 单路输入 PWM 端点 --- */
 typedef struct {
-    void     *port;
-    uint32_t  pin;
-} bsp_motor_gpio_t;
+    void     *timer;
+    uint32_t  channel;
+} bsp_motor_pwm_t;
 
 /* --- 电机运行方向 --- */
 typedef enum {
@@ -27,10 +27,8 @@ typedef struct bsp_motor bsp_motor_t;
 
 struct bsp_motor {
     /* --- 1. 物理配置 (Config) --- */
-    bsp_motor_gpio_t dir_pin1;
-    bsp_motor_gpio_t dir_pin2;
-    void     *pwm_timer;
-    uint32_t  pwm_channel;
+    bsp_motor_pwm_t input1_pwm;
+    bsp_motor_pwm_t input2_pwm;
     void     *enc_timer;
 
     /* --- 2. 运行状态 (Status) --- */
@@ -41,9 +39,7 @@ struct bsp_motor {
     bool    use_speed_pid;      /* true=速度PID闭环, false=开环直写PWM */
 
     /* --- 3. 抽象硬件操作方法 (Function Pointers) --- */
-    void    (*Gpio_Config)(void);
     void    (*Init)(bsp_motor_t *motor);
-    void    (*Gpio_Write)(void *port, uint32_t pin, uint8_t level);
     void    (*Pwm_Write)(void *timer, uint32_t channel, uint32_t duty);
     int32_t (*Enc_Read)(void *enc_timer);
 };

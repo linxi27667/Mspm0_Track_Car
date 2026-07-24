@@ -31,6 +31,7 @@ typedef enum {
 typedef enum {
     TRACK_LINE_NORMAL = 0,
     TRACK_LINE_LEFT_CORNER,
+    TRACK_LINE_RIGHT_CORNER,
     TRACK_LINE_LOST,
     TRACK_LINE_INVALID
 } track_line_type_t;
@@ -118,6 +119,39 @@ static inline bool Track_Rotate_ShouldCoast(float angle_error_deg,
            Track_Abs_Float(output) < coast_output;
 }
 
+static inline bool Track_Rotate_StallCandidate(float angle_error_deg,
+                                                float gyro_rate_deg_s,
+                                                int32_t left_encoder_speed,
+                                                int32_t right_encoder_speed,
+                                                float min_error_deg,
+                                                float max_error_deg,
+                                                float stall_rate_deg_s,
+                                                int32_t encoder_idle_max)
+{
+    float error_abs = Track_Abs_Float(angle_error_deg);
+    return min_error_deg >= 0.0f && max_error_deg >= min_error_deg &&
+           encoder_idle_max >= 0 && error_abs >= min_error_deg &&
+           error_abs <= max_error_deg &&
+           Track_Abs_Float(gyro_rate_deg_s) <= stall_rate_deg_s &&
+           left_encoder_speed >= -encoder_idle_max &&
+           left_encoder_speed <= encoder_idle_max &&
+           right_encoder_speed >= -encoder_idle_max &&
+           right_encoder_speed <= encoder_idle_max;
+}
+
+static inline bool Track_Rotate_RecoveryMoving(float gyro_rate_deg_s,
+                                                int32_t left_encoder_speed,
+                                                int32_t right_encoder_speed,
+                                                float release_rate_deg_s,
+                                                int32_t release_encoder_speed)
+{
+    return Track_Abs_Float(gyro_rate_deg_s) > release_rate_deg_s ||
+           left_encoder_speed < -release_encoder_speed ||
+           left_encoder_speed > release_encoder_speed ||
+           right_encoder_speed < -release_encoder_speed ||
+           right_encoder_speed > release_encoder_speed;
+}
+
 static inline float Track_Rotate_SpeedLimit(float error_abs_deg,
                                              float fine_zone_deg,
                                              float blend_zone_deg,
@@ -196,7 +230,7 @@ static inline bool Track_Timeout_Reached(uint32_t now,
 static inline bool Track_CornerArmed(uint32_t now,
                                      uint32_t tracking_started_at,
                                      uint32_t last_corner_completed_at,
-                                     uint8_t completed_corners,
+                                     uint16_t completed_corners,
                                      uint32_t arm_delay_ms,
                                      uint32_t retrigger_delay_ms)
 {
@@ -244,6 +278,47 @@ static inline float Track_ComputeDigitalLineError8(uint8_t digital_mask,
     return weighted_sum / (float)black_count;
 }
 
+static inline uint8_t Track_CountBits12(uint16_t value)
+{
+    uint8_t count = 0u;
+
+    value &= 0x0FFFu;
+    while (value != 0u) {
+        count = (uint8_t)(count + (uint8_t)(value & 1u));
+        value >>= 1;
+    }
+    return count;
+}
+
+static inline float Track_ComputeDigitalLineError12(uint16_t digital_mask,
+                                                     float fallback)
+{
+    float weighted_sum = 0.0f;
+    uint8_t black_count = 0u;
+
+    digital_mask &= 0x0FFFu;
+    if (digital_mask == 0u) return fallback;
+
+    for (uint8_t i = 0u; i < 12u; i++) {
+        if ((digital_mask & (uint16_t)(1u << i)) == 0u) continue;
+
+        /* A1..A12 are vehicle left..right. Keep the legacy controller's
+         * -3.5..+3.5 input scale while increasing spatial resolution. */
+        weighted_sum += -3.5f + (float)i * (7.0f / 11.0f);
+        black_count++;
+    }
+
+    return weighted_sum / (float)black_count;
+}
+
+static inline float Track_LimitRecoveryError(float error, float limit)
+{
+    float magnitude = Track_Abs_Float(limit);
+    if (error > magnitude) return magnitude;
+    if (error < -magnitude) return -magnitude;
+    return error;
+}
+
 static inline bool Track_MaskIsContiguous(uint8_t digital_mask)
 {
     if (digital_mask == 0u) return false;
@@ -253,10 +328,30 @@ static inline bool Track_MaskIsContiguous(uint8_t digital_mask)
     return digital_mask == 0u;
 }
 
+static inline bool Track_MaskIsContiguous12(uint16_t digital_mask)
+{
+    digital_mask &= 0x0FFFu;
+    if (digital_mask == 0u) return false;
+
+    while ((digital_mask & 1u) == 0u) digital_mask >>= 1;
+    while ((digital_mask & 1u) != 0u) digital_mask >>= 1;
+    return digital_mask == 0u;
+}
+
+static inline uint8_t Track_MirrorMask8(uint8_t digital_mask)
+{
+    digital_mask = (uint8_t)(((digital_mask & 0x55u) << 1) |
+                             ((digital_mask & 0xAAu) >> 1));
+    digital_mask = (uint8_t)(((digital_mask & 0x33u) << 2) |
+                             ((digital_mask & 0xCCu) >> 2));
+    return (uint8_t)((digital_mask << 4) | (digital_mask >> 4));
+}
+
 static inline bool Track_SquareLeftCorner(uint8_t digital_mask,
                                            uint8_t min_black)
 {
     uint8_t black_count = Track_CountBits8(digital_mask);
+    bool enough_black = black_count >= min_black;
     bool strict_measured_corner = digital_mask == 0x0Fu ||
                                   digital_mask == 0x1Fu;
     bool center_pair = (digital_mask & (1u << 3)) != 0u &&
@@ -269,19 +364,45 @@ static inline bool Track_SquareLeftCorner(uint8_t digital_mask,
                        (digital_mask & 0xC0u) != 0u;
     bool ideal_left_corner =
         digital_mask != 0xFFu && Track_MaskIsContiguous(digital_mask) &&
-        black_count >= min_black && left_chain && !right_chain;
+        left_chain && !right_chain;
 
     /* Real-car L-corner evidence: the far-left branch reaches S0 while the
-     * incoming line still covers S3.  This includes the measured 0x09, 0x0D
-     * and 0x0F masks.  The temporal centered-history gate is applied by the
-     * caller, so an isolated wide-left mask cannot trigger a turn. */
+     * incoming line still covers S3.  Four-or-more black channels are still
+     * required by enough_black, so sparse 0x09/0x0D transition noise cannot
+     * directly trigger a turn; measured 0x0F/0x1B remain valid. */
     bool split_left_corner =
         (digital_mask & 0x01u) != 0u &&
         (digital_mask & 0x08u) != 0u &&
         (digital_mask & 0xE0u) == 0u &&
-        black_count >= 2u && black_count <= 4u;
+        black_count <= 5u;
 
-    return strict_measured_corner || ideal_left_corner || split_left_corner;
+    return enough_black &&
+           (strict_measured_corner || ideal_left_corner || split_left_corner);
+}
+
+static inline bool Track_SquareRightCorner(uint8_t digital_mask,
+                                            uint8_t min_black)
+{
+    return Track_SquareLeftCorner(Track_MirrorMask8(digital_mask), min_black);
+}
+
+/* On the counter-clockwise square track, four-or-more black channels after a
+ * recently centered line are sufficient corner evidence. Direction is fixed
+ * by the course, so a noisy physical channel order (for example 0x87) must not
+ * be allowed to reverse or suppress the turn. Full black remains invalid. */
+static inline bool Track_SquareCornerEvidence(uint8_t digital_mask,
+                                               uint8_t min_black)
+{
+    return digital_mask != 0u && digital_mask != 0xFFu &&
+           Track_CountBits8(digital_mask) >= min_black;
+}
+
+static inline bool Track_SquareCornerEvidence12(uint16_t digital_mask,
+                                                 uint8_t min_black)
+{
+    digital_mask &= 0x0FFFu;
+    return digital_mask != 0u && digital_mask != 0x0FFFu &&
+           Track_CountBits12(digital_mask) >= min_black;
 }
 
 static inline track_line_observation_t Track_ClassifyLine8(
@@ -302,6 +423,12 @@ static inline track_line_observation_t Track_ClassifyLine8(
                                                             fallback);
         return observation;
     }
+    if (Track_SquareRightCorner(digital_mask, corner_min_black)) {
+        observation.type = TRACK_LINE_RIGHT_CORNER;
+        observation.error = Track_ComputeDigitalLineError8(digital_mask,
+                                                            fallback);
+        return observation;
+    }
     if (observation.black_count <= 3u &&
         Track_MaskIsContiguous(digital_mask)) {
         observation.type = TRACK_LINE_NORMAL;
@@ -314,23 +441,165 @@ static inline track_line_observation_t Track_ClassifyLine8(
     return observation;
 }
 
+static inline track_line_observation_t Track_ClassifyLine12(
+    uint16_t digital_mask, float fallback, uint8_t corner_min_black)
+{
+    track_line_observation_t observation;
+
+    digital_mask &= 0x0FFFu;
+    observation.black_count = Track_CountBits12(digital_mask);
+    observation.error = fallback;
+
+    if (digital_mask == 0u) {
+        observation.type = TRACK_LINE_LOST;
+        return observation;
+    }
+    if (digital_mask == 0x0FFFu) {
+        observation.type = TRACK_LINE_INVALID;
+        return observation;
+    }
+    if (Track_SquareCornerEvidence12(digital_mask, corner_min_black)) {
+        observation.type = TRACK_LINE_LEFT_CORNER;
+        observation.error = Track_ComputeDigitalLineError12(digital_mask,
+                                                             fallback);
+        return observation;
+    }
+    if (observation.black_count <= 4u &&
+        Track_MaskIsContiguous12(digital_mask)) {
+        observation.type = TRACK_LINE_NORMAL;
+        observation.error = Track_ComputeDigitalLineError12(digital_mask,
+                                                             fallback);
+        return observation;
+    }
+
+    observation.type = TRACK_LINE_INVALID;
+    return observation;
+}
+
+static inline int8_t Track_CornerTurnSign(track_line_type_t type)
+{
+    if (type == TRACK_LINE_LEFT_CORNER) return 1;
+    if (type == TRACK_LINE_RIGHT_CORNER) return -1;
+    return 0;
+}
+
+static inline int8_t Track_CornerDirectionFromMask(uint8_t digital_mask)
+{
+    uint8_t black_count = Track_CountBits8(digital_mask);
+    bool center_anchor = (digital_mask & 0x18u) != 0u;
+    bool far_left = (digital_mask & 0x03u) != 0u;
+    bool far_right = (digital_mask & 0xC0u) != 0u;
+
+    /* S2/S5仍属于中心附近，不能仅凭0x1C/0x38的轻微偏线决定90度方向。
+     * 全白兜底至少需要4个黑点、中心入口锚点和仅一侧远端支路；
+     * 0x09/0x0D等稀疏噪声、全黑及双侧展开均不得留下方向证据。 */
+    if (black_count < 4u || !center_anchor || far_left == far_right) return 0;
+    if (far_left) return 1;
+    if (far_right) return -1;
+    return 0;
+}
+
+static inline int8_t Track_CornerDirectionFromMask12(uint16_t digital_mask)
+{
+    uint8_t black_count;
+    bool center_anchor;
+    bool far_left;
+    bool far_right;
+
+    digital_mask &= 0x0FFFu;
+    black_count = Track_CountBits12(digital_mask);
+    center_anchor = (digital_mask & 0x0060u) != 0u; /* A6/A7 */
+    far_left = (digital_mask & 0x0007u) != 0u;      /* A1..A3 */
+    far_right = (digital_mask & 0x0E00u) != 0u;     /* A10..A12 */
+
+    if (black_count < 6u || !center_anchor || far_left == far_right) return 0;
+    return far_left ? 1 : -1;
+}
+
+static inline bool Track_CornerEvidenceRecent(int8_t turn_sign,
+                                               uint32_t now,
+                                               uint32_t evidence_at,
+                                               uint32_t recent_ms)
+{
+    return (turn_sign == 1 || turn_sign == -1) &&
+           (uint32_t)(now - evidence_at) <= recent_ms;
+}
+
+static inline bool Track_CenteredEvidenceRecent(bool has_evidence,
+                                                 uint32_t now,
+                                                 uint32_t evidence_at,
+                                                 uint32_t recent_ms)
+{
+    return has_evidence &&
+           (uint32_t)(now - evidence_at) <= recent_ms;
+}
+
 static inline uint8_t Track_UpdateCornerConfirm(uint8_t current,
                                                  uint8_t centered_history,
                                                  bool corner_candidate)
 {
-    if (!corner_candidate) return 0u;
-    if (current == 0u && centered_history < 2u) return 0u;
+    if (!corner_candidate || centered_history < 2u) return 0u;
     return (current < 255u) ? (uint8_t)(current + 1u) : current;
+}
+
+static inline bool Track_CornerCandidateReady(bool gyro_available,
+                                               bool corner_armed,
+                                               bool centered_recent,
+                                               uint8_t confirm_frames,
+                                               uint8_t required_frames)
+{
+    return gyro_available && corner_armed && centered_recent &&
+           required_frames > 0u && confirm_frames >= required_frames;
+}
+
+static inline uint8_t Track_UpdateCornerGate(uint8_t current,
+                                              bool corner_candidate,
+                                              bool gyro_available,
+                                              bool corner_armed,
+                                              bool centered_recent)
+{
+    bool gate_open = corner_candidate && gyro_available && corner_armed &&
+                     centered_recent;
+    return Track_UpdateCornerConfirm(current, gate_open ? 2u : 0u, gate_open);
 }
 
 static inline bool Track_WhiteCornerFallbackReady(uint8_t centered_history,
                                                    uint8_t white_frames,
+                                                   uint8_t required_white_frames,
                                                    uint32_t now,
                                                    uint32_t last_centered_at,
                                                    uint32_t recent_ms)
 {
-    return centered_history >= 2u && white_frames >= 2u &&
+    return required_white_frames > 0u && centered_history >= 2u &&
+           white_frames >= required_white_frames &&
            (uint32_t)(now - last_centered_at) <= recent_ms;
+}
+
+static inline float Track_CornerTargetHeading(float entry_heading,
+                                               int8_t turn_sign,
+                                               float angle_magnitude)
+{
+    float magnitude = Track_Abs_Float(angle_magnitude);
+    if (turn_sign > 0) return entry_heading + magnitude;
+    if (turn_sign < 0) return entry_heading - magnitude;
+    return entry_heading;
+}
+
+static inline float Track_CornerTurnProgress(float entry_heading,
+                                              float actual_heading,
+                                              int8_t turn_sign)
+{
+    if (turn_sign == 0) return 0.0f;
+    return (actual_heading - entry_heading) * (float)turn_sign;
+}
+
+static inline bool Track_CornerCapturePoseValid(float turn_progress_deg,
+                                                 float angle_error_deg,
+                                                 float min_progress_deg,
+                                                 float max_error_deg)
+{
+    return turn_progress_deg >= min_progress_deg &&
+           Track_Abs_Float(angle_error_deg) <= max_error_deg;
 }
 
 static inline bool Track_CaptureLineValid(track_line_observation_t observation,
@@ -397,10 +666,30 @@ static inline float Track_CaptureBlendTurn(float heading_turn,
                                             float line_error,
                                             bool line_visible,
                                             float line_kp,
+                                            float line_limit,
                                             float limit)
 {
-    float line_turn = line_visible ? line_kp * line_error : 0.0f;
+    float line_turn = line_visible
+                    ? Track_ClampTurn(line_kp * line_error, line_limit)
+                    : 0.0f;
     return Track_ClampTurn(heading_turn + line_turn, limit);
+}
+
+static inline float Track_CaptureHeadingPriority(float angle_error_deg,
+                                                  float heading_turn,
+                                                  float blended_turn,
+                                                  float heading_deadband_deg)
+{
+    if (Track_Abs_Float(angle_error_deg) <= heading_deadband_deg) {
+        return blended_turn;
+    }
+    /* turn>0=右转，正角度误差需要左转(turn<0)，负误差反之。
+     * 灰度可以减弱航向修正，但不能在尚未到位时把方向反过来。 */
+    if ((angle_error_deg > 0.0f && blended_turn >= 0.0f) ||
+        (angle_error_deg < 0.0f && blended_turn <= 0.0f)) {
+        return heading_turn;
+    }
+    return blended_turn;
 }
 
 static inline bool Track_CornersComplete(uint16_t completed_corners,
@@ -423,18 +712,23 @@ static inline bool Track_RightAngle_HeadingSettled(float angle_error_deg,
            Track_Abs_Float(gyro_rate_deg_s) <= TRACK_RIGHT_ANGLE_DONE_RATE;
 }
 
-static inline bool Track_RightAngle_HybridHandoff(float turned_abs_deg,
+static inline bool Track_RightAngle_HybridHandoff(float turn_progress_deg,
+                                                   float angle_error_deg,
                                                    float gyro_rate_deg_s,
                                                    uint8_t line_frames,
                                                    float min_line_turn_deg,
                                                    float handoff_turn_deg,
+                                                   float max_line_error_deg,
+                                                   float max_angle_error_deg,
                                                    float max_rate_deg_s,
                                                    uint8_t required_line_frames)
 {
     bool rate_ready = Track_Abs_Float(gyro_rate_deg_s) <= max_rate_deg_s;
-    bool line_ready = turned_abs_deg >= min_line_turn_deg &&
+    bool line_ready = turn_progress_deg >= min_line_turn_deg &&
+                      Track_Abs_Float(angle_error_deg) <= max_line_error_deg &&
                       line_frames >= required_line_frames;
-    bool angle_ready = turned_abs_deg >= handoff_turn_deg;
+    bool angle_ready = turn_progress_deg >= handoff_turn_deg &&
+                       Track_Abs_Float(angle_error_deg) <= max_angle_error_deg;
     return rate_ready && (line_ready || angle_ready);
 }
 

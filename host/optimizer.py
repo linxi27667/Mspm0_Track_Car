@@ -8,8 +8,8 @@ Per candidate: stop -> manual confirm -> MCU ACK -> two independent 5-lap trials
 Any line-loss/fault/timeout/stale-frame immediately rolls back.
 Candidates ranked by: zero-fault, P95 lap time, lateral error, saturation, wheel diff.
 
-Initial steps: KP 0.5, KD 0.2, GDAMP 0.02, RATHR 0.2, speed 2.
-Halve on no improvement down to: 0.1/0.05/0.01/0.05/1.
+Initial steps: KP 0.5, KD 0.2, GDAMP 0.02, RATHR 1, speed 2.
+Halve on no improvement down to: 0.1/0.05/0.01/1/1.
 Max 24 candidates per session.
 """
 
@@ -129,6 +129,7 @@ class TrialCollector:
         self._stale_count = 0
         self._consecutive_ll = 0
         self._abort_reason = ""
+        self._last_sensor_errors: int | None = None
 
     def start(self, start_ms: int = 0):
         """开始收集。start_ms 为试验开始的 MCU 时间戳（毫秒）。"""
@@ -140,7 +141,7 @@ class TrialCollector:
     def feed(self, tele: dict[str, Any]) -> TrialMetrics | None:
         """喂入一帧遥测。返回 None 表示试验继续，返回 TrialMetrics 表示结束。
 
-        遥测字段：st, le, po, el, er, ms, seq, drop, cal 等。
+        遥测字段：st, le, po, el, er, ms, seq, sa, se 等。
         """
         if not self._active:
             return None
@@ -160,12 +161,14 @@ class TrialCollector:
             self._sat_count += 1
         self._wheel_diff_sum += abs(el - er)
 
-        # 故障检测：遥测中 bc 字段非零表示故障（bad/safety fault）
-        if tele.get("bc", 0):
-            self._fault_count += 1
+        # se 是鱼眼通信错误累计值；只统计本次试验期间的新增错误。
+        sensor_errors = int(tele.get("se", 0))
+        if self._last_sensor_errors is not None and sensor_errors > self._last_sensor_errors:
+            self._fault_count += sensor_errors - self._last_sensor_errors
+        self._last_sensor_errors = sensor_errors
 
-        # 陈旧帧检测：frame age > 20ms（遥测帧年龄字段 fa，若存在）
-        if tele.get("fa", 0) > 20:
+        # 12路完整帧正常约10ms；超过50ms与固件Safety门限一致。
+        if tele.get("sa", 0) > 50:
             self._stale_count += 1
 
         # 丢线检测
@@ -176,9 +179,6 @@ class TrialCollector:
                 return self._finish(abort="line_lost")
         else:
             self._consecutive_ll = 0
-
-        # 故障状态检测：st == "FN" 且非正常完成，或 safety 相关
-        # （实际 safety state 通过 bc 字段已捕获）
 
         # 圈计数：检测非 SL -> SL 转换
         if st == "SL" and self._prev_st != "SL":
@@ -228,12 +228,12 @@ class TrialCollector:
 
 # 初始步长
 INITIAL_STEPS: dict[str, float] = {
-    "KP": 0.5, "KD": 0.2, "GDAMP": 0.02, "RATHR": 0.2,
+    "KP": 0.5, "KD": 0.2, "GDAMP": 0.02, "RATHR": 1.0,
     "VBASE": 2, "VSTR": 2, "VCUR": 2,
 }
 # 最小步长（低于此值该坐标收敛）
 MIN_STEPS: dict[str, float] = {
-    "KP": 0.1, "KD": 0.05, "GDAMP": 0.01, "RATHR": 0.05,
+    "KP": 0.1, "KD": 0.05, "GDAMP": 0.01, "RATHR": 1.0,
     "VBASE": 1, "VSTR": 1, "VCUR": 1,
 }
 MAX_CANDIDATES = 24

@@ -7,6 +7,7 @@ param(
     [string]$Interface = 'SWD',
     [int]$Speed = 1000,
     [string]$ProbeSerial = '69514110',
+    [switch]$ConnectUnderReset,
     [string]$LogPath = 'logs\closed_loop\jlink-flash.log'
 )
 
@@ -20,13 +21,25 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
 
 $commandFile = Join-Path ([IO.Path]::GetTempPath()) ("track-car-flash-{0}.jlink" -f [guid]::NewGuid())
 try {
-    @('r', 'h', "loadfile $hex", 'r', 'g', 'q') | Set-Content -LiteralPath $commandFile -Encoding ascii
+    $commands = if ($ConnectUnderReset) {
+        @('ClrRESET', 'sleep 100', 'connect', 'SetRESET', 'sleep 100',
+          'h', "loadfile $hex", 'r', 'g', 'q')
+    } else {
+        @('r', 'h', "loadfile $hex", 'r', 'g', 'q')
+    }
+    $commands | Set-Content -LiteralPath $commandFile -Encoding ascii
     Write-Host "[FLASH] device=$Device probe=$ProbeSerial interface=$Interface speed=${Speed}kHz"
     & $JLinkExe -USB $ProbeSerial -Device $Device -If $Interface -Speed $Speed `
         -AutoConnect 1 -CommandFile $commandFile -Log $log
     $exitCode = $LASTEXITCODE
     $text = Get-Content -Raw -LiteralPath $log
-    if ($exitCode -ne 0 -or $text -notmatch 'O\.K\.') {
+    $fatalPattern = 'Failed to initialize DAP|No PWR-AP detected|Could not connect to the target device|Error occurred:'
+    $targetConnected = $text -match 'DAP initialized successfully\.'
+    $downloadStarted = $text -match 'JLINK_DownloadFile\(sFile = '
+    $downloadCompleted = $text -match 'JLINK_DownloadFile[\s\S]*?End of comparing flash[\s\S]*?returns 0x00'
+    if ($exitCode -ne 0 -or $text -match $fatalPattern -or
+        -not $targetConnected -or -not $downloadStarted -or
+        -not $downloadCompleted) {
         throw "J-Link flash/verify failed (exit=$exitCode). See $log"
     }
     Write-Host "[FLASH] PASS: programmed and verified; log=$log"
@@ -34,4 +47,3 @@ try {
 finally {
     Remove-Item -LiteralPath $commandFile -Force -ErrorAction SilentlyContinue
 }
-

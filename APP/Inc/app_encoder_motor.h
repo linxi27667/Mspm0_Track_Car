@@ -9,21 +9,17 @@
 #include "ti_msp_dl_config.h"
 #include "user_tuning.h"
 
-/* ============ 左电机硬件配置 ============ */
-#define MOTOR_LEFT_PWM_TIMER        Monitor_Left_Timer_INST
-#define MOTOR_LEFT_PWM_CHANNEL      GPIO_Monitor_Left_Timer_C0_IDX
-#define MOTOR_LEFT_DIR1_PORT        Monitor_Dir_PORT
-#define MOTOR_LEFT_DIR1_PIN         Monitor_Dir_Monitor_AIN1_PIN
-#define MOTOR_LEFT_DIR2_PORT        Monitor_Dir_PORT
-#define MOTOR_LEFT_DIR2_PIN         Monitor_Dir_Monitor_AIN2_PIN
+/* ============ AT8236左电机双PWM配置 ============ */
+#define MOTOR_LEFT_AIN1_PWM_TIMER   Motor_Left_Timer_INST
+#define MOTOR_LEFT_AIN1_PWM_CHANNEL GPIO_Motor_Left_Timer_C1_IDX
+#define MOTOR_LEFT_AIN2_PWM_TIMER   Motor_Left_Timer_INST
+#define MOTOR_LEFT_AIN2_PWM_CHANNEL GPIO_Motor_Left_Timer_C2_IDX
 
-/* ============ 右电机硬件配置 ============ */
-#define MOTOR_RIGHT_PWM_TIMER       Right_Motor_Timer_INST
-#define MOTOR_RIGHT_PWM_CHANNEL     GPIO_Right_Motor_Timer_C0_IDX
-#define MOTOR_RIGHT_DIR1_PORT       Right_Motor_Dir_PORT
-#define MOTOR_RIGHT_DIR1_PIN        Right_Motor_Dir_AIN1_PIN
-#define MOTOR_RIGHT_DIR2_PORT       Right_Motor_Dir_PORT
-#define MOTOR_RIGHT_DIR2_PIN        Right_Motor_Dir_AIN2_PIN
+/* ============ AT8236右电机双PWM配置 ============ */
+#define MOTOR_RIGHT_BIN1_PWM_TIMER  Motor_Right_BIN1_Timer_INST
+#define MOTOR_RIGHT_BIN1_PWM_CHANNEL GPIO_Motor_Right_BIN1_Timer_C0_IDX
+#define MOTOR_RIGHT_BIN2_PWM_TIMER  Motor_Right_BIN2_Timer_INST
+#define MOTOR_RIGHT_BIN2_PWM_CHANNEL GPIO_Motor_Right_BIN2_Timer_C1_IDX
 
 /* SysConfig edge-aligned down-count PWM uses CC=period-duty. */
 #define MOTOR_PWM_PERIOD             100u
@@ -33,9 +29,9 @@
  * 左右编码器均由PHA/PHB双边沿中断驱动同一正交状态机。
  */
 #define LEFT_ENC_PHA_PORT           Left_Encoder_PORT
-#define LEFT_ENC_PHA_PIN            Left_Encoder_PHA_PIN
+#define LEFT_ENC_PHA_PIN            Left_Encoder_LEFT_PHA_PIN
 #define LEFT_ENC_PHB_PORT           Left_Encoder_PORT
-#define LEFT_ENC_PHB_PIN            Left_Encoder_PHB_PIN
+#define LEFT_ENC_PHB_PIN            Left_Encoder_LEFT_PHB_PIN
 #define RIGHT_ENC_PHA_PORT          Right_Encoder_PORT
 #define RIGHT_ENC_PHA_PIN           Right_Encoder_PHA_PIN
 #define RIGHT_ENC_PHB_PORT          Right_Encoder_PORT
@@ -102,6 +98,10 @@ void Motor_Stop(void);
 void Motor_Update_Status(void);
 void App_Motor_Speed_PID_Update(void);
 void App_Motor_Enable_Speed_PID(bool enable);
+void App_Motor_Set_Speed_PID(float kp, float ki, float kd);
+float App_Motor_Get_Speed_PID_Kp(void);
+float App_Motor_Get_Speed_PID_Ki(void);
+float App_Motor_Get_Speed_PID_Kd(void);
 
 /* 速度比例尺设置 (国一方案: 左右编码器分辨率不同必须分别标定)
  * - App_Motor_Set_Speed_Scale: 同时设置左右 (兼容旧调用)

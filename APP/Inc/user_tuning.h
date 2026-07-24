@@ -6,7 +6,7 @@
  *          仅保留 TRACK_* / MOTOR_* 别名，不再保留 #ifndef 回退默认值。
  *          main.c 不再重复定义。
  *
- *          远程可调参数（8 个）的 min/max/default 同时由 host/param_schema.py
+ *          远程可调参数的 min/max/default 同时由 host/param_schema.py
  *          驱动，tests/test_param_schema.py 验证两者默认值一致。
  *          最终比赛档值唯一落在本文件，RACE 构建直接编译生效。
  *
@@ -54,10 +54,17 @@
 #define USER_LINE_PID_DERIV_ALPHA  0.6f    /* 不完全微分系数(0~1,越大滤波越弱) */
 #endif
 /* 国一方案核心: LINE_FOLLOW 陀螺仪角速度阻尼 (直行稳/弯道灵)
- * 公式: turn_output = line_pid - GYRO_DAMP * gyro_z
+ * 实车极性: 左转gyro_z>0、左转差速turn<0，因此阻尼取正号：
+ * 公式: turn_output = line_pid + GYRO_DAMP * gyro_z
  * 调参: 直道抖动→加大(0.15→0.3), 弯道跟踪迟钝→减小(0.15→0.08) */
 #ifndef USER_LINE_FOLLOW_GYRO_DAMP
 #define USER_LINE_FOLLOW_GYRO_DAMP 0.25f   /* 实车直线角速度阻尼 */
+#endif
+#ifndef USER_LINE_RECOVERY_MAX_ERROR
+#define USER_LINE_RECOVERY_MAX_ERROR 1.5f  /* 丢线/无效帧沿末次方向低增益找线 */
+#endif
+#ifndef USER_LINE_LOST_RECOVERY_MS
+#define USER_LINE_LOST_RECOVERY_MS   150u  /* 最后方向低速找线超时后锁定停车 */
 #endif
 
 /* ==================================================================
@@ -117,13 +124,13 @@
  * 省一方案: 单圈15秒,说明速度中等,我们用40起步
  * ================================================================== */
 #ifndef USER_TRACK_BASE_SPEED
-#define USER_TRACK_BASE_SPEED      28      /* 首轮实车安全档：启动基础PWM */
+#define USER_TRACK_BASE_SPEED      18      /* 12路鱼眼首跑低速安全档 */
 #endif
 #ifndef USER_TRACK_SPEED_STRAIGHT
-#define USER_TRACK_SPEED_STRAIGHT  30      /* 首轮实车安全档：直道PWM */
+#define USER_TRACK_SPEED_STRAIGHT  20      /* 12路鱼眼首跑直道档 */
 #endif
 #ifndef USER_TRACK_SPEED_CURVE
-#define USER_TRACK_SPEED_CURVE     26      /* 首轮实车安全档：偏线PWM */
+#define USER_TRACK_SPEED_CURVE     16      /* 12路鱼眼首跑弯道档 */
 #endif
 #ifndef USER_TRACK_SPEED_RAMP_STEP
 #define USER_TRACK_SPEED_RAMP_STEP 2       /* 速度渐变步进(避免突变抖动) */
@@ -142,18 +149,16 @@
 #ifndef USER_TRACK_SPEED_PID_ENABLE
 #define USER_TRACK_SPEED_PID_ENABLE 1       /* 循迹默认启用左右独立轮速闭环 */
 #endif
-#ifndef USER_GRAYSCALE_MIN_CAL_CONTRAST
-#define USER_GRAYSCALE_MIN_CAL_CONTRAST 200u /* 每路黑白ADC最小有效差值 */
-#endif
 /* ==================================================================
  * ====== 4. 丢线/直角弯参数 ======
  * 调参方法:
- *   1. 左拐角检测不到→确认S3/S4中心对仍压线，再逐步降低RATHR
- *   2. 普通跑偏被误判为拐角→将RATHR调至4.0
- * 方形赛道模式: 中心到单侧外沿形成连续黑色链才识别为拐角。
+ *   1. 拐角检测不到→确认近期有连续2帧居中，RATHR保持4
+ *   2. 普通宽线被误判为拐角→将RATHR按整数逐步调到5~6
+ * 逆时针方形赛道模式: 近期居中后，任意非全黑且达到RATHR的展开
+ * 图案均作为角点证据；转向固定为左转，mask不参与方向决策。
  * ================================================================== */
 #ifndef USER_RIGHT_ANGLE_THRESHOLD
-#define USER_RIGHT_ANGLE_THRESHOLD 4.0f    /* 中心对+左侧连续展开，至少4路黑 */
+#define USER_RIGHT_ANGLE_THRESHOLD 6.0f    /* 12路角点候选最少黑通道数 */
 #endif
 #ifndef USER_RIGHT_ANGLE_CONFIRM_FRAMES
 #define USER_RIGHT_ANGLE_CONFIRM_FRAMES 1  /* 严格角点图案单帧触发；仍需2帧居中历史 */
@@ -168,10 +173,10 @@
 #define USER_RIGHT_ANGLE_ARM_DELAY  200     /* 启动后短暂稳定，避免漏掉靠近起点的首个角 */
 #endif
 #ifndef USER_RIGHT_ANGLE_TIMEOUT
-#define USER_RIGHT_ANGLE_TIMEOUT   7000    /* 前探、停车、闭环转向和捕线总超时 */
+#define USER_RIGHT_ANGLE_TIMEOUT   7000    /* PIVOT/CAPTURE单阶段看门狗；超时继续闭环并记录 */
 #endif
 #ifndef USER_RIGHT_ANGLE_TARGET_ANGLE
-#define USER_RIGHT_ANGLE_TARGET_ANGLE    90.0f /* IMU按入口航向左转90度 */
+#define USER_RIGHT_ANGLE_TARGET_ANGLE    90.0f /* 逆时针方形赛道固定左转角度 */
 #endif
 #ifndef USER_ENCODER_LEFT_COUNTS_PER_MM
 #define USER_ENCODER_LEFT_COUNTS_PER_MM  0.0f  /* 必须用左轮实测，不允许猜测 */
@@ -183,7 +188,7 @@
 #define USER_SENSOR_TO_AXLE_MM           0.0f  /* 探头检测中心到驱动轮轴实测距离 */
 #endif
 #ifndef USER_RIGHT_ANGLE_DETECT_COMP_MM
-#define USER_RIGHT_ANGLE_DETECT_COMP_MM  0.0f  /* 检测三帧与制动造成的补偿距离 */
+#define USER_RIGHT_ANGLE_DETECT_COMP_MM  0.0f  /* 单帧确认与制动造成的补偿距离 */
 #endif
 #ifndef USER_RIGHT_ANGLE_APPROACH_SPEED
 #define USER_RIGHT_ANGLE_APPROACH_SPEED  28    /* 闭环前探轮速，兼顾距离与停车冲击 */
@@ -218,6 +223,9 @@
 #ifndef USER_RIGHT_ANGLE_HYBRID_MAX_RATE
 #define USER_RIGHT_ANGLE_HYBRID_MAX_RATE 25.0f /* 接管时最大角速度(deg/s) */
 #endif
+#ifndef USER_RIGHT_ANGLE_HYBRID_MAX_ERROR
+#define USER_RIGHT_ANGLE_HYBRID_MAX_ERROR 20.0f /* PIVOT转CAPTURE允许的最大航向误差 */
+#endif
 #ifndef USER_RIGHT_ANGLE_HYBRID_LINE_FRAMES
 #define USER_RIGHT_ANGLE_HYBRID_LINE_FRAMES 2u /* 新线连续确认帧数 */
 #endif
@@ -226,6 +234,9 @@
 #endif
 #ifndef USER_RIGHT_ANGLE_CAPTURE_TURN_LIMIT
 #define USER_RIGHT_ANGLE_CAPTURE_TURN_LIMIT 8.0f
+#endif
+#ifndef USER_RIGHT_ANGLE_CAPTURE_LINE_LIMIT
+#define USER_RIGHT_ANGLE_CAPTURE_LINE_LIMIT 3.0f /* 灰度项不得压过航向控制权 */
 #endif
 #ifndef USER_RIGHT_ANGLE_CAPTURE_HEADING_KP
 #define USER_RIGHT_ANGLE_CAPTURE_HEADING_KP 0.20f /* 捕线时航向仅作辅助 */
@@ -238,6 +249,12 @@
 #endif
 #ifndef USER_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES
 #define USER_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES 3u
+#endif
+#ifndef USER_RIGHT_ANGLE_CAPTURE_MAX_ERROR
+#define USER_RIGHT_ANGLE_CAPTURE_MAX_ERROR 12.0f /* CORNER_DONE时最大航向误差 */
+#endif
+#ifndef USER_RIGHT_ANGLE_CAPTURE_REPIVOT_ERROR
+#define USER_RIGHT_ANGLE_CAPTURE_REPIVOT_ERROR 25.0f /* 超窗则回原地航向闭环 */
 #endif
 /* Rotation/heading outer loop: angle P + measured yaw-rate damping. Its
  * output is a wheel-speed target; the encoder P loop below it produces PWM. */
@@ -276,6 +293,33 @@
 #endif
 #ifndef USER_ROTATE_SETTLE_FRAMES
 #define USER_ROTATE_SETTLE_FRAMES        20u  /* 100ms at the 5ms control tick */
+#endif
+#ifndef USER_ROTATE_STALL_RATE_DEG_S
+#define USER_ROTATE_STALL_RATE_DEG_S      2.0f /* 近目标静止判据 */
+#endif
+#ifndef USER_ROTATE_STALL_MIN_ERROR_DEG
+#define USER_ROTATE_STALL_MIN_ERROR_DEG   6.0f /* 小角度命令不启用破静摩擦助推 */
+#endif
+#ifndef USER_ROTATE_STALL_MAX_ERROR_DEG
+#define USER_ROTATE_STALL_MAX_ERROR_DEG  15.0f /* 仅在接近90度目标时助推 */
+#endif
+#ifndef USER_ROTATE_STALL_ENCODER_IDLE_MAX
+#define USER_ROTATE_STALL_ENCODER_IDLE_MAX 1   /* 容忍霍尔边沿量化抖动 */
+#endif
+#ifndef USER_ROTATE_STALL_CONFIRM_FRAMES
+#define USER_ROTATE_STALL_CONFIRM_FRAMES 20u   /* 双编码器+角速度静止100ms */
+#endif
+#ifndef USER_ROTATE_STALL_KICK_SPEED
+#define USER_ROTATE_STALL_KICK_SPEED    20     /* 旋转专用破静摩擦轮速目标 */
+#endif
+#ifndef USER_ROTATE_STALL_KICK_HOLD_FRAMES
+#define USER_ROTATE_STALL_KICK_HOLD_FRAMES 20u /* 助推至少保持100ms，避免单脉冲回落 */
+#endif
+#ifndef USER_ROTATE_STALL_RELEASE_RATE_DEG_S
+#define USER_ROTATE_STALL_RELEASE_RATE_DEG_S 4.0f /* 明确恢复转动后才退出助推 */
+#endif
+#ifndef USER_ROTATE_STALL_RELEASE_ENCODER_SPEED
+#define USER_ROTATE_STALL_RELEASE_ENCODER_SPEED 1 /* |encoder_speed|>1视为恢复 */
 #endif
 #ifndef USER_ROTATE_TIMEOUT_BASE_MS
 #define USER_ROTATE_TIMEOUT_BASE_MS     1000u
@@ -320,7 +364,18 @@
 #define USER_PARAM_VSTR_MAX   100
 #define USER_PARAM_VCUR_MIN   0
 #define USER_PARAM_VCUR_MAX   100
-#define USER_PARAM_RATHR_MIN  0.5f
-#define USER_PARAM_RATHR_MAX  10.0f
+#define USER_PARAM_RATHR_MIN  5.0f
+#define USER_PARAM_RATHR_MAX 10.0f
+
+#define USER_PARAM_MKP_MIN    0.0f
+#define USER_PARAM_MKP_MAX    5.0f
+#define USER_PARAM_MKI_MIN    0.0f
+#define USER_PARAM_MKI_MAX    1.0f
+#define USER_PARAM_MKD_MIN    0.0f
+#define USER_PARAM_MKD_MAX    5.0f
+#define USER_PARAM_MSL_MIN    0.01f
+#define USER_PARAM_MSL_MAX    2.0f
+#define USER_PARAM_MSR_MIN    0.01f
+#define USER_PARAM_MSR_MAX    2.0f
 
 #endif /* USER_TUNING_H */

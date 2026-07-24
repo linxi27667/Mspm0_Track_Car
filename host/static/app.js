@@ -15,6 +15,8 @@ socket.on("disconnect", () => {
 
 let frameCount = 0;
 let lastTelemetryReceivedAt = null;
+let currentTrackState = "??";
+const motorParamNames = new Set(["MKP", "MKI", "MKD", "MSL", "MSR"]);
 
 const stateMap = {
     ID: "空闲",
@@ -39,14 +41,13 @@ function setTelemetryText(id, value, digits = null) {
     element.textContent = value ?? "--";
 }
 
-function calibrationLabel(value) {
-    const labels = {
-        0: "未校准",
-        1: "仅白色",
-        2: "仅黑色",
-        3: "白+黑",
-    };
-    return labels[value] || "--";
+function updateMotorParamAvailability(state) {
+    const allowed = ["ID", "FN", "MT"].includes(state);
+    motorParamNames.forEach((name) => {
+        document.querySelectorAll(`[data-name="${name}"]`).forEach((element) => {
+            element.disabled = !allowed;
+        });
+    });
 }
 
 function updateMotionData(tele) {
@@ -108,17 +109,22 @@ socket.on("telemetry", (tele) => {
     document.getElementById("frame-counter").textContent = `帧: ${frameCount}`;
 
     lastTelemetryReceivedAt = Date.now();
+    currentTrackState = tele.st;
+    updateMotorParamAvailability(currentTrackState);
     setTelemetryText("tele-state-code", tele.st);
     setTelemetryText("tele-state-name", stateMap[tele.st] || "未知状态");
     setTelemetryText("tele-seq", tele.seq);
     setTelemetryText("tele-ms", tele.ms);
     setTelemetryText("tele-received", new Date(lastTelemetryReceivedAt).toLocaleTimeString());
     setTelemetryText("tele-bc", tele.bc);
-    setTelemetryText("tele-cal", calibrationLabel(tele.cal));
+    setTelemetryText("tele-lm", `0x${Number(tele.lm).toString(16).toUpperCase().padStart(3, "0")}`);
+    setTelemetryText("tele-sa", tele.sa);
+    setTelemetryText("tele-se", tele.se);
+    setTelemetryText("tele-bp", tele.bp === 1 ? "1=黑" : "0=黑");
     setTelemetryText("tele-drop", tele.drop);
 
-    (tele.adc || []).forEach((value, index) => {
-        setTelemetryText(`tele-adc-${index}`, value);
+    (tele.line || []).forEach((value, index) => {
+        setTelemetryText(`tele-line-${index}`, value);
     });
 
     setTelemetryText("tele-gz", tele.gz, 2);
@@ -197,6 +203,8 @@ document.querySelectorAll(".param-slider").forEach((slider) => {
 function collectParams() {
     const params = {};
     document.querySelectorAll(".param-input").forEach((input) => {
+        if (motorParamNames.has(input.dataset.name) &&
+            !["ID", "FN", "MT"].includes(currentTrackState)) return;
         const value = Number.parseFloat(input.value);
         if (!Number.isNaN(value)) params[input.dataset.name] = value;
     });
@@ -217,8 +225,6 @@ function sendCmd(cmd) {
 
 document.getElementById("btn-start").addEventListener("click", () => sendCmd("start"));
 document.getElementById("btn-stop").addEventListener("click", () => sendCmd("stop"));
-document.getElementById("btn-whitecal").addEventListener("click", () => sendCmd("whitecal"));
-document.getElementById("btn-blackcal").addEventListener("click", () => sendCmd("blackcal"));
 document.getElementById("btn-reconnect").addEventListener("click", () => sendCmd("reconnect"));
 
 document.getElementById("btn-motor-test").addEventListener("click", () => {
@@ -520,11 +526,11 @@ const PRESETS = {
     },
     balanced: {
         KP: 5.0, KI: 0.0, KD: 1.0, GDAMP: 0.15,
-        VBASE: 40, VSTR: 50, VCUR: 30, RATHR: 2.5,
+        VBASE: 40, VSTR: 50, VCUR: 30, RATHR: 4.0,
     },
     aggressive: {
         KP: 8.0, KI: 0.0, KD: 0.5, GDAMP: 0.10,
-        VBASE: 60, VSTR: 70, VCUR: 45, RATHR: 3.0,
+        VBASE: 60, VSTR: 70, VCUR: 45, RATHR: 4.0,
     },
 };
 

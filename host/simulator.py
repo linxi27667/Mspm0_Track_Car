@@ -40,7 +40,7 @@ def simulate(host: str = "127.0.0.1", port: int = 8888):
     print("[SIM] 开始发送 100Hz TC1 遥测，按 Ctrl+C 退出")
 
     params = dict(DEFAULT_PARAMS)
-    state = {"current": "LF", "cal": 3}
+    state = {"current": "LF"}
     state_lock = threading.Lock()
     send_lock = threading.Lock()
     stop_event = threading.Event()
@@ -74,6 +74,13 @@ def simulate(host: str = "127.0.0.1", port: int = 8888):
         request_id = request["id"]
         if "set" in request:
             with state_lock:
+                motor_names = {"MKP", "MKI", "MKD", "MSL", "MSR"}
+                if motor_names & set(request["set"]) and state["current"] not in {"ID", "MT"}:
+                    send_message(build_ack(
+                        request_id, False, "set",
+                        error="motor_tuning_requires_idle",
+                    ))
+                    return
                 params.update(request["set"])
                 applied = dict(params)
             print(f"[SIM] 收到参数 id={request_id}: {request['set']}")
@@ -86,10 +93,6 @@ def simulate(host: str = "127.0.0.1", port: int = 8888):
                 state["current"] = "LF"
             elif cmd == "stop":
                 state["current"] = "ID"
-            elif cmd == "whitecal":
-                state["cal"] |= 0x01
-            elif cmd == "blackcal":
-                state["cal"] |= 0x03
         print(f"[SIM] 收到指令 id={request_id}: {cmd}")
         send_message(build_ack(request_id, True, "cmd"))
 
@@ -155,7 +158,6 @@ def simulate(host: str = "127.0.0.1", port: int = 8888):
             with state_lock:
                 p = dict(params)
                 requested_state = state["current"]
-                calibration = state["cal"]
 
             error, gyro, track_state = _scene_values(elapsed)
             error = max(-3.5, min(3.5, error))
@@ -175,15 +177,20 @@ def simulate(host: str = "127.0.0.1", port: int = 8888):
                 left_speed = int(base - turn * 0.5)
                 right_speed = int(base + turn * 0.5)
 
-            adc = _simulate_adc(error, track_state)
+            line = _simulate_line(error, track_state)
+            line_mask = sum(bit << index for index, bit in enumerate(line))
             frame_count += 1
             telemetry = {
                 "v": 1,
                 "t": "tele",
                 "seq": frame_count & 0xFFFFFFFF,
                 "ms": int(elapsed * 1000) & 0xFFFFFFFF,
-                "adc": adc,
-                "bc": sum(1 for value in adc if value < 800),
+                "line": line,
+                "lm": line_mask,
+                "bc": sum(line),
+                "sa": 5,
+                "se": 0,
+                "bp": 1,
                 "gz": round(gyro, 2),
                 "el": left_speed,
                 "er": right_speed,
@@ -199,7 +206,6 @@ def simulate(host: str = "127.0.0.1", port: int = 8888):
                 "vc": p["VCUR"],
                 "rt": p["RATHR"],
                 "drop": 0,
-                "cal": calibration,
             }
             if not send_message(telemetry):
                 break
@@ -248,15 +254,20 @@ def _scene_values(elapsed: float) -> tuple[float, float, str]:
     )
 
 
-def _simulate_adc(error: float, state: str) -> list[int]:
+def _simulate_line(error: float, state: str) -> list[int]:
     if state == "LL":
-        return [random.randint(80, 120) for _ in range(8)]
-    adc = []
-    for index in range(8):
-        distance = abs((index - 3.5) - error)
-        value = 2000 - int(1500 * math.exp(-distance * 0.5)) + random.randint(-50, 50)
-        adc.append(max(0, min(4095, value)))
-    return adc
+        return [0] * 12
+    if state == "RA":
+        return [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+
+    line = [0] * 12
+    position = max(0.0, min(11.0, (error + 3.5) * 11.0 / 7.0))
+    left = int(math.floor(position))
+    right = min(11, left + 1)
+    line[left] = 1
+    if right != left and position - left > 0.25:
+        line[right] = 1
+    return line
 
 
 if __name__ == "__main__":

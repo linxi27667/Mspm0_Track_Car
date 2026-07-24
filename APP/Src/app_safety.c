@@ -6,7 +6,7 @@
  *            1. Track/PID 可计算期望速度，但电机输出仅当
  *               Safety_AllowsMotorOutput() 返回 true 时才执行。
  *            2. BOOT/CALIBRATING/READY/FINISHED 状态始终切断 PWM。
- *            3. 运行中仅IMU与灰度传感器异常失效安全停车。
+ *            3. 运行中仅IMU与鱼眼循迹传感器异常失效安全停车。
  *            4. 通信与心跳仅用于诊断，不参与运动授权。
  *
  * @note    本模块不直接操作硬件寄存器，通过 BSP/APP API 切断电机:
@@ -26,8 +26,8 @@ static safety_state_t s_state = SAFETY_STATE_BOOT;
 static safety_fault_t s_fault = SAFETY_FAULT_NONE;
 static uint32_t s_finished_at = 0u;
 
-/* 校准完成标志 */
-static bool     s_calibration_complete = false;
+static bool     s_path_fish_ready = false;
+static uint8_t  s_centered_frames = 0u;
 static safety_health_t s_health;
 
 /* ============================================================
@@ -42,37 +42,14 @@ static void Safety_CutMotor(void)
     Bsp_Motor_Write_Pwm(&Motor_Right, 0);
 }
 
-static bool Safety_GrayscaleCalibrationValid(void)
-{
-    return Grayscale_Calibration_Valid(USER_GRAYSCALE_MIN_CAL_CONTRAST);
-}
-
-static uint16_t Safety_GrayscaleContrast(uint8_t channel)
-{
-    uint16_t white = Grayscale_Sensor.white[channel];
-    uint16_t black = Grayscale_Sensor.black[channel];
-    return (white >= black) ? (uint16_t)(white - black)
-                            : (uint16_t)(black - white);
-}
-
-static void Safety_LogCalibrationContrast(void)
-{
-    elog_w("SAFETY", "calibration rejected min=%u D=%u,%u,%u,%u,%u,%u,%u,%u",
-           USER_GRAYSCALE_MIN_CAL_CONTRAST,
-           Safety_GrayscaleContrast(0), Safety_GrayscaleContrast(1),
-           Safety_GrayscaleContrast(2), Safety_GrayscaleContrast(3),
-           Safety_GrayscaleContrast(4), Safety_GrayscaleContrast(5),
-           Safety_GrayscaleContrast(6), Safety_GrayscaleContrast(7));
-}
-
 static const char *s_state_names[] = {
     "BOOT", "CALIBRATING", "READY", "RUNNING", "FINISHED", "FAULT"
 };
 
 static const char *s_fault_names[] = {
     "NONE",
-    "GRAYSCALE_EXPIRED",
-    "CALIBRATION_INCOMPLETE",
+    "PATH_FISH_EXPIRED",
+    "PATH_FISH_NOT_READY",
     "SENSOR_ABNORMAL",
     "MANUAL_STOP",
     "LINE_LOST_TIMEOUT"
@@ -80,8 +57,8 @@ static const char *s_fault_names[] = {
 
 static bool Safety_FaultIsUserVisible(safety_fault_t fault)
 {
-    return fault == SAFETY_FAULT_GRAYSCALE_EXPIRED ||
-           fault == SAFETY_FAULT_CALIBRATION_INCOMPLETE ||
+    return fault == SAFETY_FAULT_PATH_FISH_EXPIRED ||
+           fault == SAFETY_FAULT_PATH_FISH_NOT_READY ||
            fault == SAFETY_FAULT_SENSOR_ABNORMAL ||
            fault == SAFETY_FAULT_LINE_LOST_TIMEOUT;
 }
@@ -95,11 +72,12 @@ void Safety_Init(void)
     s_state                = SAFETY_STATE_BOOT;
     s_fault                = SAFETY_FAULT_NONE;
     s_finished_at          = 0u;
-    s_calibration_complete = false;
-    s_health.grayscale_required = false;
-    s_health.grayscale_seen = false;
+    s_path_fish_ready       = false;
+    s_centered_frames       = 0u;
+    s_health.path_fish_required = false;
+    s_health.path_fish_seen = false;
     s_health.sensor_abnormal = false;
-    s_health.last_grayscale_tick = 0u;
+    s_health.last_path_fish_tick = 0u;
 
     Safety_CutMotor();
     elog_i("SAFETY", "init: state=BOOT, motor cut");
@@ -120,9 +98,8 @@ void Safety_TransitionToReady(void)
     if (s_state == SAFETY_STATE_FAULT) return;
     if (s_state == SAFETY_STATE_READY) return;
 
-    /* 进入 READY 前必须校准完成 */
-    if (!s_calibration_complete) {
-        elog_w("SAFETY", "READY blocked: calibration incomplete");
+    if (!s_path_fish_ready) {
+        elog_w("SAFETY", "READY blocked: Path Fish not centered/healthy");
         return;
     }
 
@@ -136,19 +113,19 @@ void Safety_TransitionToRunning(void)
     if (s_state == SAFETY_STATE_FAULT) return;
     if (s_state == SAFETY_STATE_RUNNING) return;
 
-    /* 必须从 READY 进入，校准已完成 */
+    /* 必须从 READY 进入，并已获得连续居中的健康鱼眼帧。 */
     if (s_state != SAFETY_STATE_READY) {
         elog_w("SAFETY", "RUNNING blocked: state=%s",
                Safety_StateName(s_state));
         return;
     }
-    if (!s_calibration_complete) {
-        elog_w("SAFETY", "RUNNING blocked: calibration incomplete");
+    if (!s_path_fish_ready) {
+        elog_w("SAFETY", "RUNNING blocked: Path Fish not ready");
         return;
     }
 
     s_state = SAFETY_STATE_RUNNING;
-    s_health.grayscale_required = true;
+    s_health.path_fish_required = true;
 
     elog_i("SAFETY", "-> RUNNING (motor armed)");
 }
@@ -160,7 +137,7 @@ bool Safety_TransitionToRotation(void)
     }
 
     s_state = SAFETY_STATE_RUNNING;
-    s_health.grayscale_required = false;
+    s_health.path_fish_required = false;
     elog_i("SAFETY", "-> RUNNING (rotation)");
     return true;
 }
@@ -170,14 +147,14 @@ void Safety_TransitionAfterRotation(void)
     if (s_state == SAFETY_STATE_FAULT) return;
 
     Safety_CutMotor();
-    if (s_calibration_complete) {
+    if (s_path_fish_ready) {
         s_state = SAFETY_STATE_READY;
         elog_i("SAFETY", "rotation ended -> READY");
     } else {
         s_state = SAFETY_STATE_BOOT;
-        elog_i("SAFETY", "rotation ended -> BOOT (gray calibration pending)");
+        elog_i("SAFETY", "rotation ended -> BOOT (Path Fish readiness pending)");
     }
-    s_health.grayscale_required = false;
+    s_health.path_fish_required = false;
 }
 
 bool Safety_TransitionToBenchTest(void)
@@ -188,7 +165,7 @@ bool Safety_TransitionToBenchTest(void)
     }
 
     s_state = SAFETY_STATE_RUNNING;
-    s_health.grayscale_required = false;
+    s_health.path_fish_required = false;
     elog_i("SAFETY", "-> RUNNING (motor bench test)");
     return true;
 }
@@ -198,8 +175,8 @@ void Safety_TransitionAfterBenchTest(void)
     if (s_state == SAFETY_STATE_FAULT) return;
 
     Safety_CutMotor();
-    s_state = s_calibration_complete ? SAFETY_STATE_READY : SAFETY_STATE_BOOT;
-    s_health.grayscale_required = false;
+    s_state = s_path_fish_ready ? SAFETY_STATE_READY : SAFETY_STATE_BOOT;
+    s_health.path_fish_required = false;
     elog_i("SAFETY", "motor bench test ended -> %s",
            Safety_StateName(s_state));
 }
@@ -209,7 +186,7 @@ void Safety_TransitionToFinished(void)
     if (s_state == SAFETY_STATE_FAULT) return;
     s_state = SAFETY_STATE_FINISHED;
     s_finished_at = Bsp_GetTick();
-    s_health.grayscale_required = false;
+    s_health.path_fish_required = false;
     Safety_CutMotor();
     elog_i("SAFETY", "-> FINISHED");
 }
@@ -237,8 +214,8 @@ void Safety_ClearFault(void)
 
     recovered_fault = s_fault;
     s_fault = SAFETY_FAULT_NONE;
-    s_state = s_calibration_complete ? SAFETY_STATE_READY : SAFETY_STATE_BOOT;
-    s_health.grayscale_required = false;
+    s_state = s_path_fish_ready ? SAFETY_STATE_READY : SAFETY_STATE_BOOT;
+    s_health.path_fish_required = false;
     s_health.sensor_abnormal = false;
     if (Safety_FaultIsUserVisible(recovered_fault)) {
         elog_i("SAFETY", "auto recovered -> %s", Safety_StateName(s_state));
@@ -270,11 +247,11 @@ bool Safety_ControlTick(void)
         Safety_CutMotor();
         if (Safety_Logic_FinishedHoldElapsed(Bsp_GetTick(), s_finished_at,
                                              APP_SAFETY_FINISHED_HOLD_MS)) {
-            if (s_calibration_complete) {
+            if (s_path_fish_ready) {
                 Safety_TransitionToReady();
             } else {
                 s_state = SAFETY_STATE_BOOT;
-                elog_i("SAFETY", "finished hold elapsed -> BOOT (calibration pending)");
+                elog_i("SAFETY", "finished hold elapsed -> BOOT (Path Fish pending)");
             }
         }
         return false;
@@ -288,11 +265,11 @@ bool Safety_ControlTick(void)
     if (s_state == SAFETY_STATE_RUNNING) {
         uint32_t now = Bsp_GetTick();
         safety_logic_result_t result = Safety_Logic_Check(
-            now, &s_health, APP_GRAYSCALE_FRAME_TIMEOUT_MS);
+            now, &s_health, APP_PATH_FISH_FRAME_TIMEOUT_MS);
         if (result != SAFETY_LOGIC_OK) {
             static const safety_fault_t fault_map[] = {
                 SAFETY_FAULT_NONE,
-                SAFETY_FAULT_GRAYSCALE_EXPIRED,
+                SAFETY_FAULT_PATH_FISH_EXPIRED,
                 SAFETY_FAULT_SENSOR_ABNORMAL,
             };
             Safety_EnterFault(fault_map[result]);
@@ -339,10 +316,38 @@ const char *Safety_FaultName(safety_fault_t fault)
  * 传感器健康更新
  * ============================================================ */
 
-void Safety_NotifyGrayscaleFrame(uint32_t tick)
+void Safety_NotifyPathFishFrame(uint32_t tick, bool centered_normal)
 {
-    s_health.last_grayscale_tick = tick;
-    s_health.grayscale_seen = true;
+    s_health.last_path_fish_tick = tick;
+    s_health.path_fish_seen = true;
+
+    if (centered_normal) {
+        if (s_centered_frames < 255u) s_centered_frames++;
+    } else {
+        s_centered_frames = 0u;
+    }
+
+    if (!s_path_fish_ready && s_centered_frames >= 2u) {
+        s_path_fish_ready = true;
+        elog_i("SAFETY", "Path Fish ready: 2 centered complete frames");
+        if (s_state == SAFETY_STATE_BOOT ||
+            s_state == SAFETY_STATE_CALIBRATING) {
+            Safety_TransitionToReady();
+        }
+    }
+}
+
+void Safety_ResetPathFishReadiness(void)
+{
+    s_path_fish_ready = false;
+    s_centered_frames = 0u;
+    if (s_state == SAFETY_STATE_READY) s_state = SAFETY_STATE_BOOT;
+    Safety_CutMotor();
+}
+
+bool Safety_PathFishReady(void)
+{
+    return s_path_fish_ready;
 }
 
 void Safety_NotifySensorAbnormal(void)
@@ -353,29 +358,9 @@ void Safety_NotifySensorAbnormal(void)
     }
 }
 
-void Safety_NotifyCalibrationComplete(void)
+void Safety_NotifyLineLostTimeout(void)
 {
-    s_calibration_complete = Safety_GrayscaleCalibrationValid();
-    if (!s_calibration_complete) Safety_LogCalibrationContrast();
-}
-
-void Safety_TryAdvanceAfterCalibration(void)
-{
-    /* 检查灰度白+黑校准都完成 */
-    if (Grayscale_Sensor.calibrated && Grayscale_Sensor.black_calibrated &&
-        Safety_GrayscaleCalibrationValid()) {
-        if (!s_calibration_complete) {
-            s_calibration_complete = true;
-            elog_i("SAFETY", "calibration complete (white+black)");
-        }
-        if (s_state == SAFETY_STATE_BOOT || s_state == SAFETY_STATE_CALIBRATING) {
-            Safety_TransitionToReady();
-        }
-    } else if (Grayscale_Sensor.calibrated &&
-               Grayscale_Sensor.black_calibrated) {
-        s_calibration_complete = false;
-        Safety_LogCalibrationContrast();
-    }
+    Safety_EnterFault(SAFETY_FAULT_LINE_LOST_TIMEOUT);
 }
 
 /* ============================================================

@@ -4,7 +4,7 @@
  *
  *          使用 app_tc1 的零堆分配字节流解帧器处理入站 TC1 帧。
  *          完整帧解码后按消息类型派发: auth/set/cmd/ping。
- *          遥测以 10Hz TC1 帧上报, 带序列号/时间戳/帧年龄/故障/校准/速度/参数版本。
+ *          遥测以 10Hz TC1 帧上报, 带序列号/时间戳/鱼眼帧龄/错误/速度/参数版本。
  *          set/cmd 带单调 id, MCU 原子应用并回传完整参数快照 (ack)。
  *
  * @note    RACE 模式 (APP_TUNING_MODE=0) 编译禁用入站命令处理。
@@ -18,7 +18,7 @@
 #include "track.h"
 #include "imu_health_logic.h"
 #include "bsp_common.h"
-#include "bsp_grayscale.h"
+#include "bsp_path_fish.h"
 #include "bsp_encoder_motor.h"
 #include "user_tuning.h"
 #include "elog.h"
@@ -40,8 +40,8 @@ static bool         s_authenticated   = false;
 
 /* 静态缓冲区 (避免栈分配) */
 static char s_telem_json[TC1_MAX_JSON_BYTES + 1]; /* 遥测 JSON 组包缓冲 */
-static char s_ack_json[256];            /* ACK JSON 组包缓冲 */
-static char s_cached_ack_json[256];     /* 最近 SET/CMD ACK，供同 ID 重试重放 */
+static char s_ack_json[384];            /* ACK JSON 组包缓冲 */
+static char s_cached_ack_json[384];     /* 最近 SET/CMD ACK，供同 ID 重试重放 */
 static uint16_t s_cached_ack_len = 0;
 static uint32_t s_cached_ack_id = 0;
 static bool s_cached_ack_valid = false;
@@ -177,20 +177,26 @@ static void send_tc1_json(const char *json, uint16_t json_len)
  * ACK 组包与发送
  * ============================================================ */
 
-/* 构建包含全部 8 参数的 applied 快照 */
+/* 构建线环、速度策略和电机环的完整 applied 快照。 */
 static uint16_t build_applied_snapshot(char *buf, uint16_t size)
 {
     int n = snprintf(buf, size,
         "{\"KP\":%.3f,\"KI\":%.3f,\"KD\":%.3f,\"GDAMP\":%.3f,"
-        "\"VBASE\":%d,\"VSTR\":%d,\"VCUR\":%d,\"RATHR\":%.3f}",
+        "\"VBASE\":%d,\"VSTR\":%d,\"VCUR\":%d,\"RATHR\":%.3f,"
+        "\"MKP\":%.3f,\"MKI\":%.3f,\"MKD\":%.3f,"
+        "\"MSL\":%.3f,\"MSR\":%.3f}",
         (double)Track.line_pid.kp,
         (double)Track.line_pid.ki,
         (double)Track.line_pid.kd,
         (double)Track.gyro_damp,
         (int)Track.base_speed,
         (int)Track.speed_straight,
-        (int)Track.speed_curve,
-        (double)Track.right_angle_threshold);
+        (int)Track.speed_curve, (double)Track.right_angle_threshold,
+        (double)App_Motor_Get_Speed_PID_Kp(),
+        (double)App_Motor_Get_Speed_PID_Ki(),
+        (double)App_Motor_Get_Speed_PID_Kd(),
+        (double)App_Motor_Get_Speed_Scale_Left(),
+        (double)App_Motor_Get_Speed_Scale_Right());
     if (n < 0 || n >= (int)size) return 0;
     return (uint16_t)n;
 }
@@ -199,7 +205,7 @@ static uint16_t build_applied_snapshot(char *buf, uint16_t size)
 static void send_ack(uint32_t msg_id, bool has_id, bool ok,
                      const char *kind, const char *error)
 {
-    char applied[128];
+    char applied[256];
     uint16_t applied_len = 0;
     if (ok && strcmp(kind, "set") == 0) {
         applied_len = build_applied_snapshot(applied, sizeof(applied));
@@ -254,10 +260,36 @@ static void send_ack(uint32_t msg_id, bool has_id, bool ok,
  * 参数应用
  * ============================================================ */
 
-/* 解析 set 消息中的参数并应用 (每个参数钳位后应用) */
-static void apply_set_params(const char *json)
+static bool motor_tuning_allowed(void)
+{
+    safety_state_t safety = Safety_GetState();
+    bool stationary = Track.state == TRACK_STATE_IDLE ||
+                      Track.state == TRACK_STATE_FINISHED;
+    return Track_Is_Motor_Test() ||
+           (stationary &&
+            (safety == SAFETY_STATE_BOOT || safety == SAFETY_STATE_READY));
+}
+
+/* 解析 set 消息中的参数并应用。电机参数整组先检查静止门控。 */
+static bool apply_set_params(const char *json, const char **error)
 {
     float v;
+    float mkp;
+    float mki;
+    float mkd;
+    float msl;
+    float msr;
+    bool has_mkp = find_num(json, "MKP", &mkp);
+    bool has_mki = find_num(json, "MKI", &mki);
+    bool has_mkd = find_num(json, "MKD", &mkd);
+    bool has_msl = find_num(json, "MSL", &msl);
+    bool has_msr = find_num(json, "MSR", &msr);
+    bool has_motor = has_mkp || has_mki || has_mkd || has_msl || has_msr;
+
+    if (has_motor && !motor_tuning_allowed()) {
+        *error = "motor_tuning_requires_idle";
+        return false;
+    }
 
     if (find_num(json, "KP", &v)) {
         v = clamp_f(v, USER_PARAM_KP_MIN, USER_PARAM_KP_MAX);
@@ -299,6 +331,28 @@ static void apply_set_params(const char *json)
         Track_Set_RightAngleThreshold(v);
         APP_TUNING_LOG_I(LOG_TAG, "set RATHR=%.3f", (double)v);
     }
+
+    if (has_motor) {
+        if (!has_mkp) mkp = App_Motor_Get_Speed_PID_Kp();
+        if (!has_mki) mki = App_Motor_Get_Speed_PID_Ki();
+        if (!has_mkd) mkd = App_Motor_Get_Speed_PID_Kd();
+        if (!has_msl) msl = App_Motor_Get_Speed_Scale_Left();
+        if (!has_msr) msr = App_Motor_Get_Speed_Scale_Right();
+
+        mkp = clamp_f(mkp, USER_PARAM_MKP_MIN, USER_PARAM_MKP_MAX);
+        mki = clamp_f(mki, USER_PARAM_MKI_MIN, USER_PARAM_MKI_MAX);
+        mkd = clamp_f(mkd, USER_PARAM_MKD_MIN, USER_PARAM_MKD_MAX);
+        msl = clamp_f(msl, USER_PARAM_MSL_MIN, USER_PARAM_MSL_MAX);
+        msr = clamp_f(msr, USER_PARAM_MSR_MIN, USER_PARAM_MSR_MAX);
+        App_Motor_Set_Speed_PID(mkp, mki, mkd);
+        App_Motor_Set_Speed_Scale_Left(msl);
+        App_Motor_Set_Speed_Scale_Right(msr);
+        APP_TUNING_LOG_I(LOG_TAG,
+                         "motor set P=%.3f I=%.3f D=%.3f SL=%.3f SR=%.3f",
+                         (double)mkp, (double)mki, (double)mkd,
+                         (double)msl, (double)msr);
+    }
+    return true;
 }
 
 /* 解析 cmd 消息并派发 */
@@ -318,7 +372,7 @@ static bool apply_cmd(const char *json, const char **error)
         if (Safety_GetState() != SAFETY_STATE_READY) {
             *error = (Safety_GetState() == SAFETY_STATE_BOOT ||
                       Safety_GetState() == SAFETY_STATE_CALIBRATING)
-                   ? "grayscale_not_ready" : "motion_busy";
+                   ? "path_fish_not_ready" : "motion_busy";
             return false;
         }
         if (!Track_Start()) {
@@ -329,16 +383,6 @@ static bool apply_cmd(const char *json, const char **error)
     } else if (strcmp(cmd, "stop") == 0) {
         APP_TUNING_LOG_I(LOG_TAG, "cmd stop");
         Track_Stop();
-        return true;
-    } else if (strcmp(cmd, "whitecal") == 0) {
-        APP_TUNING_LOG_I(LOG_TAG, "cmd whitecal");
-        Track_Calibrate_White();
-        Safety_TryAdvanceAfterCalibration();
-        return true;
-    } else if (strcmp(cmd, "blackcal") == 0) {
-        APP_TUNING_LOG_I(LOG_TAG, "cmd blackcal");
-        Track_Calibrate_Black();
-        Safety_TryAdvanceAfterCalibration();
         return true;
     } else if (strcmp(cmd, "motor_test") == 0) {
         if (!find_bool(json, "lifted", &lifted) || !lifted) {
@@ -465,6 +509,7 @@ static void dispatch_frame(const tc1_frame_t *frame)
         break;
     }
     case TC1_MSG_SET: {
+        const char *error = NULL;
         s_dispatch_type = frame->type;
         s_dispatch_request_crc = App_TC1_CRC32(
             (const uint8_t *)frame->json, frame->json_len);
@@ -473,7 +518,10 @@ static void dispatch_frame(const tc1_frame_t *frame)
             send_ack(frame->msg_id, frame->has_id, false, "set", "not authenticated");
             break;
         }
-        apply_set_params(frame->json);
+        if (!apply_set_params(frame->json, &error)) {
+            send_ack(frame->msg_id, frame->has_id, false, "set", error);
+            break;
+        }
         send_ack(frame->msg_id, frame->has_id, true, "set", NULL);
         break;
     }
@@ -561,9 +609,8 @@ void App_Tuning_Poll(void)
     s_last_telem_tick = now;
     s_telem_seq++;
 
-    /* 组包遥测 JSON (10Hz, 带扩展字段)
-     * 必需字段: t/adc/gz/el/er/le/po/st/kp/kd
-     * 可选字段: v/seq/ms/bc/ki/gd/vb/vs/vc/rt/drop/cal及运动诊断字段
+    /* 组包遥测 JSON (10Hz)
+     * line/lm/bc/sa/se/bp 是鱼眼完整快照与健康信息。
      */
     char motion_json[128] = "";
     if (Track_Is_Motor_Test()) {
@@ -602,30 +649,33 @@ void App_Tuning_Poll(void)
     int n = snprintf(s_telem_json, sizeof(s_telem_json),
         "{\"v\":1,\"t\":\"tele\","
         "\"seq\":%lu,\"ms\":%lu,"
-        "\"adc\":[%u,%u,%u,%u,%u,%u,%u,%u],"
+        "\"line\":[%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u],"
+        "\"lm\":%u,\"bc\":%u,\"sa\":%lu,\"se\":%lu,\"bp\":%u,"
         "\"gz\":%.2f,\"el\":%d,\"er\":%d,\"le\":%.2f,\"po\":%.2f,"
-        "\"st\":\"%s\",\"bc\":%u,"
+        "\"st\":\"%s\","
         "\"kp\":%.3f,\"ki\":%.3f,\"kd\":%.3f,\"gd\":%.3f,"
         "\"vb\":%d,\"vs\":%d,\"vc\":%d,\"rt\":%.3f,"
-        "\"drop\":%lu,\"cal\":%u%s}",
+        "\"drop\":%lu%s}",
         (unsigned long)s_telem_seq, (unsigned long)now,
-        Grayscale_Sensor.analog[0], Grayscale_Sensor.analog[1],
-        Grayscale_Sensor.analog[2], Grayscale_Sensor.analog[3],
-        Grayscale_Sensor.analog[4], Grayscale_Sensor.analog[5],
-        Grayscale_Sensor.analog[6], Grayscale_Sensor.analog[7],
+        Path_Fish_Sensor.digital[0], Path_Fish_Sensor.digital[1],
+        Path_Fish_Sensor.digital[2], Path_Fish_Sensor.digital[3],
+        Path_Fish_Sensor.digital[4], Path_Fish_Sensor.digital[5],
+        Path_Fish_Sensor.digital[6], Path_Fish_Sensor.digital[7],
+        Path_Fish_Sensor.digital[8], Path_Fish_Sensor.digital[9],
+        Path_Fish_Sensor.digital[10], Path_Fish_Sensor.digital[11],
+        Path_Fish_Sensor.mask, Path_Fish_Sensor.black_count,
+        (unsigned long)Path_Fish_FrameAge(now),
+        (unsigned long)Path_Fish_Sensor.error_count,
+        Path_Fish_Sensor.black_is_one ? 1u : 0u,
         (double)Track.gyro_rate,
         (int)Motor_Left.encoder_speed, (int)Motor_Right.encoder_speed,
         (double)Track.error, (double)Track.turn_output,
         state_abbr(Track.state),
-        (unsigned)Grayscale_Sensor.black_count,
         (double)Track.line_pid.kp, (double)Track.line_pid.ki,
         (double)Track.line_pid.kd, (double)Track.gyro_damp,
         (int)Track.base_speed, (int)Track.speed_straight,
         (int)Track.speed_curve, (double)Track.right_angle_threshold,
-        (unsigned long)App_ESP01S_GetTxDropCount(),
-        (unsigned)((Grayscale_Sensor.calibrated ? 1u : 0u) |
-                   (Grayscale_Sensor.black_calibrated ? 2u : 0u)),
-         motion_json);
+        (unsigned long)App_ESP01S_GetTxDropCount(), motion_json);
 
     if (n > 0 && n < (int)sizeof(s_telem_json)) {
         send_tc1_json(s_telem_json, (uint16_t)n);

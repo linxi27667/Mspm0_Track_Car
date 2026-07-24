@@ -29,7 +29,7 @@
 #define APP_TUNING_MODE                   1
 #define APP_TUNING_AUTH_TOKEN             "track_car_2025"
 #define APP_TUNING_TELEM_INTERVAL_MS      100u
-#define APP_GRAYSCALE_FRAME_TIMEOUT_MS    50u
+#define APP_PATH_FISH_FRAME_TIMEOUT_MS    50u
 
 /* 0=真实旋转；1=仅回 ACK 的链路测试，绝不驱动电机。 */
 #define APP_TUNING_ROTATE_LINK_TEST_MODE  0
@@ -39,8 +39,8 @@
 
 /* 日志分类开关：0 时对应类别在编译期移除，不占 RTT 或 ESP 日志带宽。 */
 /* 常用：按看到的 RTT 日志行选择开关。*/
-#define APP_LOG_GRAY_ADC_ENABLE           1  /* 首轮循迹：每秒输出8路ADC，供ESP日志分析阈值 */
-#define APP_LOG_GRAY_STATE_ENABLE         1  /* 灰度初始化/异常；仅循迹运动时周期输出 Digital、BlackCount、Cal */
+#define APP_LOG_GRAY_ADC_ENABLE           1  /* 鱼眼12路位图、帧龄和通信错误 */
+#define APP_LOG_GRAY_STATE_ENABLE         1  /* 鱼眼初始化、极性与线型诊断 */
 #define APP_LOG_ROTATE_ENABLE             1  /* 原地旋转：拒绝原因、开始、结束结果和最终角度 */
 
 /* 高级：定位通信、驱动或循迹状态机问题时再打开。*/
@@ -75,8 +75,8 @@ typedef uint32_t    gpio_pin_t;
 /* ============================================================
  * 电平约定
  * ============================================================ */
-// 低电平点亮 LED
-#define LED_ON      0
-#define LED_OFF     1
+// 板子1.0状态LED由PB4向LED3供电，高电平点亮
+#define LED_ON      1
+#define LED_OFF     0
 
 #endif /* APP_COMMON_H */

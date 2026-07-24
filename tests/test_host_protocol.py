@@ -35,7 +35,12 @@ from protocol import (  # noqa: E402
 def telemetry(**updates):
     obj = {
         "t": "tele",
-        "adc": [100, 200, 300, 400, 500, 600, 700, 800],
+        "line": [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+        "lm": 0x060,
+        "bc": 2,
+        "sa": 5,
+        "se": 0,
+        "bp": 1,
         "gz": 0.25,
         "el": 40,
         "er": 41,
@@ -175,35 +180,37 @@ class RequestTests(unittest.TestCase):
 
 
 class TelemetryTests(unittest.TestCase):
-    def test_legacy_and_extended_telemetry_are_accepted(self):
-        legacy = telemetry()
-        self.assertEqual(parse_telemetry(json.dumps(legacy)), legacy)
+    def test_path_fish_and_extended_telemetry_are_accepted(self):
+        base = telemetry()
+        self.assertEqual(parse_telemetry(json.dumps(base)), base)
 
         extended = telemetry(
             v=1,
             seq=42,
             ms=12345,
-            bc=3,
             ki=0.0,
             gd=0.15,
             vb=40,
             vs=50,
             vc=30,
-            rt=2.5,
+            rt=6.0,
             drop=2,
-            cal=3,
+            sa=9,
+            se=3,
         )
         self.assertEqual(parse_telemetry(extended), extended)
 
     def test_bad_telemetry_schema_is_rejected(self):
         invalid_objects = [
-            telemetry(adc=[]),
-            telemetry(adc=[0] * 7 + [4096]),
+            telemetry(line=[]),
+            telemetry(line=[0] * 11 + [2]),
+            telemetry(lm=0x061),
+            telemetry(bc=3),
             telemetry(le="0.1"),
             telemetry(le=math.nan),
             telemetry(st="UNKNOWN"),
             telemetry(seq=-1),
-            telemetry(cal=4),
+            telemetry(bp=2),
             telemetry(extra=1),
         ]
         for obj in invalid_objects:

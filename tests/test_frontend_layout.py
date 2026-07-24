@@ -51,10 +51,10 @@ class FrontendLayoutCssTests(unittest.TestCase):
         self.assertRegex(desktop, r"(?m)^\s*min-height:\s*560px;")
         self.assertRegex(mobile, r"(?m)^\s*min-height:\s*760px;")
 
-    def test_mobile_adc_grid_uses_two_columns(self):
-        adc_grid = self._rule(self._media_block(720), ".adc-data-grid")
+    def test_mobile_line_grid_uses_two_columns(self):
+        line_grid = self._rule(self._media_block(720), ".line-data-grid")
 
-        self.assertRegex(adc_grid, r"grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);")
+        self.assertRegex(line_grid, r"grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);")
 
     def test_frontend_displays_raw_telemetry_without_charts(self):
         html = HTML_PATH.read_text(encoding="utf-8")

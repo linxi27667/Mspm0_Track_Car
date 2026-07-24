@@ -1,14 +1,14 @@
 /**
  * @file    track.h
- * @brief   灰度PID循迹任务调度层（TASK层 — 纯业务逻辑）
- * @note    传感器布局: S0 S1 S2 S3 S4 S5 S6 S7（左→右）
- *          偏差权重:   -3.5 -2.5 -1.5 -0.5 +0.5 +1.5 +2.5 +3.5
+ * @brief   12路鱼眼数字循迹任务调度层（TASK层 — 纯业务逻辑）
+ * @note    传感器布局: A1 ... A12（车辆左→右）
+ *          偏差权重线性归一化为 -3.5 ... +3.5
  *          负偏差=黑线在左侧(需左转)  正偏差=黑线在右侧(需右转)
  *          turn_output>0=右转(左轮加速) <0=左转(右轮加速)
  *
  *          架构:
- *          BSP层: bsp_grayscale / bsp_pid / bsp_icm42688 / bsp_encoder_motor
- *          APP层: app_grayscale / app_imu / app_encoder_motor
+ *          BSP层: bsp_path_fish / bsp_pid / bsp_icm42688 / bsp_encoder_motor
+ *          APP层: app_path_fish / app_imu / app_encoder_motor
  *          TASK层: 本文件 — 只写业务逻辑，不碰任何硬件寄存器
  */
 #ifndef __TRACK_H__
@@ -17,7 +17,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "app_pid.h"
-#include "app_grayscale.h"
+#include "app_path_fish.h"
 #include "app_imu.h"
 #include "app_encoder_motor.h"
 #include "user_tuning.h"
@@ -52,13 +52,17 @@
 #define TRACK_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG USER_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG
 #define TRACK_RIGHT_ANGLE_HYBRID_HANDOFF_DEG USER_RIGHT_ANGLE_HYBRID_HANDOFF_DEG
 #define TRACK_RIGHT_ANGLE_HYBRID_MAX_RATE USER_RIGHT_ANGLE_HYBRID_MAX_RATE
+#define TRACK_RIGHT_ANGLE_HYBRID_MAX_ERROR USER_RIGHT_ANGLE_HYBRID_MAX_ERROR
 #define TRACK_RIGHT_ANGLE_HYBRID_LINE_FRAMES USER_RIGHT_ANGLE_HYBRID_LINE_FRAMES
 #define TRACK_RIGHT_ANGLE_CAPTURE_SPEED     USER_RIGHT_ANGLE_CAPTURE_SPEED
 #define TRACK_RIGHT_ANGLE_CAPTURE_TURN_LIMIT USER_RIGHT_ANGLE_CAPTURE_TURN_LIMIT
+#define TRACK_RIGHT_ANGLE_CAPTURE_LINE_LIMIT USER_RIGHT_ANGLE_CAPTURE_LINE_LIMIT
 #define TRACK_RIGHT_ANGLE_CAPTURE_HEADING_KP USER_RIGHT_ANGLE_CAPTURE_HEADING_KP
 #define TRACK_RIGHT_ANGLE_CAPTURE_HEADING_KD USER_RIGHT_ANGLE_CAPTURE_HEADING_KD
 #define TRACK_RIGHT_ANGLE_CAPTURE_HEADING_LIMIT USER_RIGHT_ANGLE_CAPTURE_HEADING_LIMIT
 #define TRACK_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES USER_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES
+#define TRACK_RIGHT_ANGLE_CAPTURE_MAX_ERROR USER_RIGHT_ANGLE_CAPTURE_MAX_ERROR
+#define TRACK_RIGHT_ANGLE_CAPTURE_REPIVOT_ERROR USER_RIGHT_ANGLE_CAPTURE_REPIVOT_ERROR
 
 /* --- LINE_FOLLOW 陀螺仪角速度阻尼 (国一方案核心) ---
  * 直行时用陀螺仪角速度作阻尼项, 抑制灰度传感器噪声引起的左右抖动
@@ -74,8 +78,6 @@
  * error=0 → SPEED_STRAIGHT, |error|>=CURVE_ERROR_MAX → SPEED_CURVE, 中间线性插值
  * 效果: 进弯平滑减速不甩出, 出弯平滑加速不慢 */
 #define TRACK_CURVE_ERROR_MAX             USER_TRACK_CURVE_ERROR_MAX
-#define TRACK_GRAYSCALE_MIN_CAL_CONTRAST   USER_GRAYSCALE_MIN_CAL_CONTRAST
-
 /* --- 电机差速 --- */
 #define TRACK_MOTOR_INNER_MIN             USER_TRACK_MOTOR_INNER_MIN
 #define TRACK_MOTOR_SPEED_MAX             100
@@ -125,15 +127,19 @@ typedef struct {
     track_state_t state;
     float    right_angle_target;    /* 直角弯道目标角度 */
     float    right_angle_entry_heading; /* 进入直角弯时的航向 */
+    int8_t   corner_turn_sign;      /* +1=左转(+yaw), -1=右转(-yaw) */
     uint32_t state_timer;           /* 当前状态进入时刻(ms) */
     uint32_t tracking_started_at;   /* 本次循迹启动时刻 */
     uint32_t last_corner_completed_at; /* 最近一次有效出弯时刻 */
     uint32_t corner_started_at;     /* 本次直角状态机总起点 */
     track_corner_phase_t corner_phase;
     track_line_type_t line_type;
-    uint8_t  line_mask;
-    uint32_t line_mask_history;     /* 最近4帧mask，最旧字节在高位 */
+    uint16_t line_mask;
+    uint64_t line_mask_history;     /* 最近4帧12位mask */
+    uint32_t line_lost_started_at;  /* 当前连续丢线/无效线型起点 */
     uint32_t last_centered_at;      /* 最近一次正常居中线型时刻 */
+    uint32_t last_corner_direction_at; /* 最近明确单侧角点方向证据时刻 */
+    int8_t   last_corner_direction; /* +1=左侧远端支路, -1=右侧远端支路 */
 
     /* --- 陀螺仪辅助 (国一方案) --- */
     float    gyro_rate;             /* 当前Z轴角速度(deg/s), LINE_FOLLOW阻尼用 */
@@ -146,6 +152,9 @@ typedef struct {
     uint32_t rotate_started_at;
     uint32_t rotate_timeout_ms;
     uint8_t  rotate_settle_frames;
+    uint8_t  rotate_stall_frames;
+    uint8_t  rotate_stall_kick_frames;
+    bool     rotate_stall_kick_active;
     const char *rotate_result;
 
     /* --- Current-heading hold (absolute heading PID) --- */
@@ -180,6 +189,7 @@ typedef struct {
     uint8_t  line_lost_confirm;     /* 丢线连续确认计数 */
     uint8_t  invalid_line_confirm;  /* 无效线型连续确认计数 */
     uint8_t  centered_history;      /* 入角前正常居中连续帧 */
+    bool     centered_evidence_valid; /* 已锁存连续2帧居中证据 */
     uint8_t  capture_confirm;       /* 转后正常线连续捕获帧 */
 
     /* --- 编码器距离前探 --- */
@@ -255,8 +265,6 @@ void Track_Set_GyroDamp(float damp);                /* 陀螺仪阻尼 */
 void Track_Set_SpeedStraight(int32_t spd);          /* 直道速度 */
 void Track_Set_SpeedCurve(int32_t spd);             /* 弯道速度 */
 void Track_Set_RightAngleThreshold(float thr);      /* 直角弯检测误差阈值 */
-void Track_Calibrate_White(void);       /* 白纸校准 */
-void Track_Calibrate_Black(void);       /* 黑纸校准 */
 track_state_t Track_Get_State(void);    /* 获取当前状态 */
 uint8_t Track_Get_Circle(void);         /* 获取当前圈数 */
 
