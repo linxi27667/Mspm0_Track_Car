@@ -860,12 +860,17 @@ static void Track_Handle_RightAngle(track_line_observation_t observation,
         Track.right_angle_entry_heading, Imu_Sensor.heading,
         Track.corner_turn_sign);
     if (Track.corner_phase == TRACK_CORNER_PIVOT) {
+        bool seek_progress_reached =
+            turn_progress >= TRACK_RIGHT_ANGLE_SEEK_MIN_TURN_DEG;
         Track.corner_heading_settle_confirm = Track_UpdateConfirmFrames(
             Track.corner_heading_settle_confirm,
             Track_RightAngle_HeadingSettled(angle_error,
                                             Imu_Sensor.gyro_z));
-        if (Track.corner_heading_settle_confirm >=
+        if (seek_progress_reached ||
+            Track.corner_heading_settle_confirm >=
                 TRACK_RIGHT_ANGLE_DONE_FRAMES) {
+            const char *capture_reason = seek_progress_reached ?
+                "seek_progress" : "gyro_settled";
             Track.corner_phase = TRACK_CORNER_CAPTURE;
             Track.rotate_stall_frames = 0u;
             Track.rotate_stall_kick_frames = 0u;
@@ -873,7 +878,8 @@ static void Track_Handle_RightAngle(track_line_observation_t observation,
             Track.corner_started_at = now;
             Track.state_timer = now;
             Track.capture_confirm = 0u;
-            APP_TRACK_LOG_I("TRACK", "CORNER_CAPTURE reason=gyro_settled dir=%c mask=0x%03X enc_d=%ld,%ld target=%d actual=%d heading_err_deg=%d progress_deg=%d rate=%d",
+            APP_TRACK_LOG_I("TRACK", "CORNER_CAPTURE reason=%s dir=%c mask=0x%03X enc_d=%ld,%ld target=%d actual=%d heading_err_deg=%d progress_deg=%d rate=%d",
+                            capture_reason,
                             Track.corner_turn_sign > 0 ? 'L' : 'R',
                             Track.line_mask, (long)left_delta,
                             (long)right_delta, (int)Track.right_angle_target,

@@ -230,13 +230,13 @@
 #define USER_RIGHT_ANGLE_DONE_RATE        6.0f /* 到位后必须基本静止(deg/s) */
 #endif
 #ifndef USER_RIGHT_ANGLE_DONE_FRAMES
-#define USER_RIGHT_ANGLE_DONE_FRAMES     20u   /* 连续100ms稳定后才开始寻线 */
+#define USER_RIGHT_ANGLE_DONE_FRAMES     20u   /* 自定义交接阈值过大时的稳定兜底 */
 #endif
 #ifndef USER_RIGHT_ANGLE_SEEK_MIN_TURN_DEG
-#define USER_RIGHT_ANGLE_SEEK_MIN_TURN_DEG 85.0f /* 完整转稳后寻线阶段的姿态保护 */
+#define USER_RIGHT_ANGLE_SEEK_MIN_TURN_DEG 80.0f /* 原地转到80度后立即向前捕线 */
 #endif
 #ifndef USER_RIGHT_ANGLE_CAPTURE_SPEED
-#define USER_RIGHT_ANGLE_CAPTURE_SPEED    18   /* 陀螺仪转稳后向前寻线 */
+#define USER_RIGHT_ANGLE_CAPTURE_SPEED    18   /* 低速向前捕线并完成剩余航向修正 */
 #endif
 #ifndef USER_RIGHT_ANGLE_CAPTURE_TURN_LIMIT
 #define USER_RIGHT_ANGLE_CAPTURE_TURN_LIMIT 8.0f

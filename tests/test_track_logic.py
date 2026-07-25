@@ -590,7 +590,8 @@ class TrackLogicTests(unittest.TestCase):
             'if (Track.corner_phase == TRACK_CORNER_CAPTURE', 1
         )[1]
         self.assertIn("observation.type != TRACK_LINE_NORMAL", pose_repivot)
-        self.assertIn("CORNER_CAPTURE reason=gyro_settled", source)
+        self.assertIn("turn_progress >= TRACK_RIGHT_ANGLE_SEEK_MIN_TURN_DEG", source)
+        self.assertIn('"seek_progress" : "gyro_settled"', source)
         self.assertNotIn("Track_RightAngle_HybridHandoff", source)
         self.assertIn("Track_EncoderDistanceReached", source)
         self.assertNotIn("CORNER_FAIL reason=approach_cal_missing", source)
@@ -771,9 +772,9 @@ class TrackLogicTests(unittest.TestCase):
                 if (Track_CornerTurnProgress(10.0f, 95.0f, 1) != 85.0f) return 30;
                 if (Track_CornerTurnProgress(10.0f, -75.0f, -1) != 85.0f) return 31;
                 if (Track_CornerTurnProgress(10.0f, 95.0f, -1) >= 0.0f) return 32;
-                if (Track_CornerCapturePoseValid(84.0f, 2.0f, 85.0f, 12.0f)) return 33;
-                if (!Track_CornerCapturePoseValid(85.0f, 8.0f, 85.0f, 12.0f)) return 34;
-                if (Track_CornerCapturePoseValid(450.0f, -360.0f, 85.0f, 12.0f)) return 35;
+                if (Track_CornerCapturePoseValid(79.0f, 2.0f, 80.0f, 12.0f)) return 33;
+                if (!Track_CornerCapturePoseValid(80.0f, 10.0f, 80.0f, 12.0f)) return 34;
+                if (Track_CornerCapturePoseValid(450.0f, -360.0f, 80.0f, 12.0f)) return 35;
                 if (!Track_CornerCapturePoseValid(70.0f, 20.0f, 70.0f, 20.0f)) return 36;
                 if (Track_CornerCapturePoseValid(450.0f, -360.0f, 70.0f, 20.0f)) return 37;
                 if (Track_CaptureHeadingPriority(8.0f, -1.0f, 2.0f, 3.0f) != -1.0f) return 38;
@@ -878,7 +879,7 @@ class TrackLogicTests(unittest.TestCase):
         self.assertIn("USER_RIGHT_ANGLE_DONE_ERROR       1.5f", tuning)
         self.assertIn("USER_RIGHT_ANGLE_DONE_RATE        6.0f", tuning)
         self.assertIn("USER_RIGHT_ANGLE_DONE_FRAMES     20u", tuning)
-        self.assertIn("USER_RIGHT_ANGLE_SEEK_MIN_TURN_DEG 85.0f", tuning)
+        self.assertIn("USER_RIGHT_ANGLE_SEEK_MIN_TURN_DEG 80.0f", tuning)
         self.assertIn("USER_RIGHT_ANGLE_CAPTURE_SPEED    18", tuning)
         self.assertIn("USER_RIGHT_ANGLE_APPROACH_FALLBACK_MS 750u", tuning)
         self.assertIn("USER_RIGHT_ANGLE_TIMEOUT   3500", tuning)
