@@ -49,11 +49,7 @@
 #define TRACK_RIGHT_ANGLE_DONE_ERROR        USER_RIGHT_ANGLE_DONE_ERROR
 #define TRACK_RIGHT_ANGLE_DONE_RATE         USER_RIGHT_ANGLE_DONE_RATE
 #define TRACK_RIGHT_ANGLE_DONE_FRAMES       USER_RIGHT_ANGLE_DONE_FRAMES
-#define TRACK_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG USER_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG
-#define TRACK_RIGHT_ANGLE_HYBRID_HANDOFF_DEG USER_RIGHT_ANGLE_HYBRID_HANDOFF_DEG
-#define TRACK_RIGHT_ANGLE_HYBRID_MAX_RATE USER_RIGHT_ANGLE_HYBRID_MAX_RATE
-#define TRACK_RIGHT_ANGLE_HYBRID_MAX_ERROR USER_RIGHT_ANGLE_HYBRID_MAX_ERROR
-#define TRACK_RIGHT_ANGLE_HYBRID_LINE_FRAMES USER_RIGHT_ANGLE_HYBRID_LINE_FRAMES
+#define TRACK_RIGHT_ANGLE_SEEK_MIN_TURN_DEG USER_RIGHT_ANGLE_SEEK_MIN_TURN_DEG
 #define TRACK_RIGHT_ANGLE_CAPTURE_SPEED     USER_RIGHT_ANGLE_CAPTURE_SPEED
 #define TRACK_RIGHT_ANGLE_CAPTURE_TURN_LIMIT USER_RIGHT_ANGLE_CAPTURE_TURN_LIMIT
 #define TRACK_RIGHT_ANGLE_CAPTURE_LINE_LIMIT USER_RIGHT_ANGLE_CAPTURE_LINE_LIMIT
@@ -61,6 +57,7 @@
 #define TRACK_RIGHT_ANGLE_CAPTURE_HEADING_KD USER_RIGHT_ANGLE_CAPTURE_HEADING_KD
 #define TRACK_RIGHT_ANGLE_CAPTURE_HEADING_LIMIT USER_RIGHT_ANGLE_CAPTURE_HEADING_LIMIT
 #define TRACK_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES USER_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES
+#define TRACK_RIGHT_ANGLE_CAPTURE_LINE_ERROR USER_RIGHT_ANGLE_CAPTURE_LINE_ERROR
 #define TRACK_RIGHT_ANGLE_CAPTURE_MAX_ERROR USER_RIGHT_ANGLE_CAPTURE_MAX_ERROR
 #define TRACK_RIGHT_ANGLE_CAPTURE_REPIVOT_ERROR USER_RIGHT_ANGLE_CAPTURE_REPIVOT_ERROR
 
@@ -131,7 +128,8 @@ typedef struct {
     uint32_t state_timer;           /* 当前状态进入时刻(ms) */
     uint32_t tracking_started_at;   /* 本次循迹启动时刻 */
     uint32_t last_corner_completed_at; /* 最近一次有效出弯时刻 */
-    uint32_t corner_started_at;     /* 本次直角状态机总起点 */
+    uint32_t corner_started_at;     /* 当前直角弯阶段计时起点，重试时可复位 */
+    uint8_t  corner_retry_count;    /* 当前直角弯已重试次数 */
     track_corner_phase_t corner_phase;
     track_line_type_t line_type;
     uint16_t line_mask;
@@ -143,6 +141,8 @@ typedef struct {
 
     /* --- 陀螺仪辅助 (国一方案) --- */
     float    gyro_rate;             /* 当前Z轴角速度(deg/s), LINE_FOLLOW阻尼用 */
+    float    line_heading_reference; /* 最近有效鱼眼帧的航向，丢线时锁定 */
+    bool     line_heading_reference_valid;
 
     /* --- 远程原地旋转（相对航向闭环） --- */
     float    rotate_heading_baseline;
@@ -152,9 +152,13 @@ typedef struct {
     uint32_t rotate_started_at;
     uint32_t rotate_timeout_ms;
     uint8_t  rotate_settle_frames;
+    uint8_t  rotate_wrong_way_frames;
     uint8_t  rotate_stall_frames;
     uint8_t  rotate_stall_kick_frames;
     bool     rotate_stall_kick_active;
+    int32_t  rotate_left_start_position;
+    int32_t  rotate_right_start_position;
+    bool     rotate_feedback_checked;
     const char *rotate_result;
 
     /* --- Current-heading hold (absolute heading PID) --- */

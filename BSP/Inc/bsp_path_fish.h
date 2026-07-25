@@ -13,6 +13,9 @@
 #define BSP_PATH_FISH_PACKET_SIZE          7u
 #define BSP_PATH_FISH_MASK_ALL        0x0FFFu
 #define BSP_PATH_FISH_PAIR_TIMEOUT_MS     15u
+#define BSP_PATH_FISH_CAL_CONFIRM_FRAMES  10u
+#define BSP_PATH_FISH_WHITE_MAX_BLACK      1u
+#define BSP_PATH_FISH_BLACK_MIN_BLACK     11u
 
 typedef enum {
     BSP_PATH_FISH_HALF_NONE = 0,
@@ -31,9 +34,17 @@ typedef struct {
     bsp_path_fish_half_t pending_half;
     uint32_t pending_tick;
 
+    uint8_t stream_packet[BSP_PATH_FISH_PACKET_SIZE];
+    uint8_t first_packet[BSP_PATH_FISH_PACKET_SIZE];
+    uint8_t stream_count;
+    uint32_t valid_packet_count;
+    uint32_t stream_resync_count;
+
     uint32_t frame_seq;
     uint32_t last_frame_tick;
     uint32_t error_count;
+    uint8_t white_surface_frames;
+    uint8_t black_surface_frames;
     bool data_ready;
     bool frame_fault;
 } bsp_path_fish_t;
@@ -43,11 +54,17 @@ bool Bsp_PathFish_AcceptPacket(bsp_path_fish_t *sensor,
                                const uint8_t *packet,
                                uint8_t length,
                                uint32_t now);
+uint8_t Bsp_PathFish_AcceptBytes(bsp_path_fish_t *sensor,
+                                 const uint8_t *bytes,
+                                 uint8_t length,
+                                 uint32_t now);
 void Bsp_PathFish_SetBlackPolarity(bsp_path_fish_t *sensor, bool black_is_one);
 void Bsp_PathFish_NotifyTransportFault(bsp_path_fish_t *sensor);
 uint32_t Bsp_PathFish_FrameAge(const bsp_path_fish_t *sensor, uint32_t now);
 bool Bsp_PathFish_IsFresh(const bsp_path_fish_t *sensor,
                           uint32_t now,
                           uint32_t timeout_ms);
+bool Bsp_PathFish_WhiteSurfaceStable(const bsp_path_fish_t *sensor);
+bool Bsp_PathFish_BlackSurfaceStable(const bsp_path_fish_t *sensor);
 
 #endif /* BSP_PATH_FISH_H */

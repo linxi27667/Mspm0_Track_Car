@@ -540,9 +540,10 @@ typedef struct {
     uint8_t last_state;
     uint8_t last_circle;
     uint8_t last_black_count;
+    uint8_t feedback_circle;
+    bool feedback_tracking;
 } main_runtime_t;
 
-static uint8_t s_oled_page;
 static bool s_oled_failure_logged;
 
 static bool Main_PeriodElapsed(uint32_t now, uint32_t *last, uint32_t period_ms)
@@ -568,8 +569,8 @@ static void Main_InitializeTracking(void)
     Track_Set_Circles(USER_TRACK_CIRCLES);
     Track_Set_Speed(USER_TRACK_BASE_SPEED);
 
-    elog_i("SYS", "Waiting for 2 centered Path Fish frames before READY");
-    elog_i("SYS", "K1=Start K2=Stop K3=OLED(K3Long=ScaleCal) K4=Polarity");
+    elog_i("SYS", "Waiting for 2 complete Path Fish frames before READY");
+    elog_i("SYS", "K1=Start K2=Stop K3=Refresh(K3Long=ScaleCal) K4=Polarity");
 }
 
 static void Main_UpdatePathFish(uint32_t now)
@@ -583,16 +584,9 @@ static void Main_UpdatePathFish(uint32_t now)
     }
 
     if (Path_Fish_Sensor.frame_seq != last_notified_seq) {
-        track_line_observation_t line = Track_ClassifyLine12(
-            Path_Fish_Sensor.mask, 0.0f,
-            (uint8_t)(Track.right_angle_threshold + 0.5f));
-        bool centered_normal =
-            line.type == TRACK_LINE_NORMAL &&
-            Track_Abs_Float(line.error) <= 0.75f;
-
         last_notified_seq = Path_Fish_Sensor.frame_seq;
         Safety_NotifyPathFishFrame(Path_Fish_Sensor.last_frame_tick,
-                                   centered_normal);
+                                   true);
     }
 }
 
@@ -603,14 +597,18 @@ static void Main_RunControl(uint32_t now, main_runtime_t *runtime)
     /* IMU恢复仅在Safety已禁止运动时执行；成功后自动重新静止校准。 */
     App_Imu_Recovery_Update(now, Safety_AllowsMotorOutput());
 
-    /* 静止校准独立于电机授权，每个 5 ms 节拍只采一个样本。 */
+    /* 静止校准独立于电机授权，每个 5 ms 节拍只采一个样本。校准完成后，
+     * 仅在电机明确禁用时持续采样并慢速跟踪零偏/温漂；运动期间冻结零偏。 */
     if (Imu_Sensor.calibration_state == IMU_CAL_RUNNING) {
         (void)Imu_Calibration_Update();
+    } else if (Imu_Sensor.calibration_state == IMU_CAL_DONE &&
+               !Safety_AllowsMotorOutput() &&
+               !Imu_Update_Stationary(0.005f)) {
+        App_Imu_Request_Recovery();
     }
 
     if (Safety_ControlTick()) {
         Track_Update();
-        App_Motor_Speed_PID_Update();
     } else if (Safety_GetState() == SAFETY_STATE_FAULT) {
         const char *reason = Safety_FaultName(Safety_GetFault());
         if (Track_Is_Motor_Test()) {
@@ -628,6 +626,10 @@ static void Main_RunControl(uint32_t now, main_runtime_t *runtime)
             Track.turn_output = 0.0f;
         }
     }
+
+    /* Keep encoder telemetry fresh after the safety layer cuts motor output.
+     * With wheel PI disabled this only samples the counters and cannot drive. */
+    App_Motor_Speed_PID_Update();
 }
 
 static void Main_LogVehicleStatus(main_runtime_t *runtime)
@@ -665,8 +667,110 @@ static void Main_LogVehicleStatus(main_runtime_t *runtime)
     runtime->last_black_count = black_count;
 }
 
+static void Main_LogFishProbe(void)
+{
+#if APP_LOG_DIAGNOSTIC_ENABLE
+    static bool probe_logged;
+    static bool packet_logged;
+    static bool cal_guide_logged;
+    static bool white_cal_logged;
+    static bool black_cal_logged;
+    static uint32_t last_state_key;
+    path_fish_transport_diag_t diag;
+    uint32_t state_key;
+
+    Path_Fish_GetTransportDiag(&diag);
+    state_key = (uint32_t)diag.status;
+    if (diag.status != PATH_FISH_TRANSPORT_OK) {
+        state_key = (state_key << 8) |
+                    (diag.current_bus_monitor &
+                     (PATH_FISH_BUS_SCL_HIGH_MASK |
+                      PATH_FISH_BUS_SDA_HIGH_MASK));
+    }
+
+    if (!probe_logged || state_key != last_state_key) {
+        probe_logged = true;
+        last_state_key = state_key;
+        APP_DIAG_LOG_I(
+            "FISH_PROBE",
+            "addr=0x%02X hz=%lu state=%s SCL=%u SDA=%u MSR=0x%02lX MBMON=0x%lX rx=%lu packets=%lu seq=%lu sync=%lu flt=%lu,%lu,%lu stuck=%lu rec=%lu/%lu",
+            PATH_FISH_I2C_ADDRESS,
+            (unsigned long)PATH_FISH_I2C_BUS_SPEED_HZ,
+            Path_Fish_TransportStatusText(),
+            (diag.current_bus_monitor & PATH_FISH_BUS_SCL_HIGH_MASK) != 0u,
+            (diag.current_bus_monitor & PATH_FISH_BUS_SDA_HIGH_MASK) != 0u,
+            (unsigned long)diag.current_controller_status,
+            (unsigned long)diag.current_bus_monitor,
+            (unsigned long)diag.transaction_count,
+            (unsigned long)diag.packet_count,
+            (unsigned long)Path_Fish_Sensor.frame_seq,
+            (unsigned long)diag.stream_resync_count,
+            (unsigned long)diag.timeout_count,
+            (unsigned long)diag.nack_count,
+            (unsigned long)diag.arbitration_lost_count,
+            (unsigned long)diag.bus_stuck_count,
+            (unsigned long)diag.recovery_success_count,
+            (unsigned long)diag.recovery_attempt_count);
+    }
+
+    if (!packet_logged && diag.packet_count != 0u) {
+        packet_logged = true;
+        APP_DIAG_LOG_I(
+            "FISH_RX",
+            "first=%02X %02X %02X %02X %02X %02X %02X",
+            diag.first_packet[0], diag.first_packet[1],
+            diag.first_packet[2], diag.first_packet[3],
+            diag.first_packet[4], diag.first_packet[5],
+            diag.first_packet[6]);
+    }
+
+    if (!cal_guide_logged) {
+        cal_guide_logged = true;
+        APP_DIAG_LOG_I(
+            "FISH_CAL",
+            "hold K1 1s; white short K1; black short K2; expect white=000000000000 black=111111111111");
+    }
+    if (!white_cal_logged &&
+        Bsp_PathFish_WhiteSurfaceStable(&Path_Fish_Sensor)) {
+        white_cal_logged = true;
+        APP_DIAG_LOG_I("FISH_CAL", "white=PASS mask=0x%03X BC=%u",
+                       Path_Fish_Sensor.mask,
+                       Path_Fish_Sensor.black_count);
+    }
+    if (!black_cal_logged &&
+        Bsp_PathFish_BlackSurfaceStable(&Path_Fish_Sensor)) {
+        black_cal_logged = true;
+        APP_DIAG_LOG_I("FISH_CAL", "black=PASS mask=0x%03X BC=%u",
+                       Path_Fish_Sensor.mask,
+                       Path_Fish_Sensor.black_count);
+    }
+#endif
+}
+
 static void Main_LogPathFish(void)
 {
+    Main_LogFishProbe();
+#if APP_PATH_FISH_I2C_DIAG_ENABLE
+    static uint32_t last_diag_error_count;
+    path_fish_transport_diag_t diag;
+
+    Path_Fish_GetTransportDiag(&diag);
+    if (Path_Fish_Sensor.error_count != last_diag_error_count) {
+        last_diag_error_count = Path_Fish_Sensor.error_count;
+        APP_GRAY_STATE_LOG_I("FISH", "i2c err=%lu timeout=%lu nack=%lu arb=%lu short=%lu overflow=%lu stuck=%lu recover=%lu/%lu status=0x%lX bus=%lu",
+            (unsigned long)Path_Fish_Sensor.error_count,
+            (unsigned long)diag.timeout_count,
+            (unsigned long)diag.nack_count,
+            (unsigned long)diag.arbitration_lost_count,
+            (unsigned long)diag.short_read_count,
+            (unsigned long)diag.overflow_count,
+            (unsigned long)diag.bus_stuck_count,
+            (unsigned long)diag.recovery_success_count,
+            (unsigned long)diag.recovery_attempt_count,
+            (unsigned long)diag.last_controller_status,
+            (unsigned long)diag.last_bus_monitor);
+    }
+#endif
     if (!Track_State_Is_LineTracking(Track.state)) return;
 
     APP_GRAY_ADC_LOG_I("FISH",
@@ -685,52 +789,80 @@ static void Main_LogPathFish(void)
         Path_Fish_Sensor.black_is_one ? 1u : 0u);
 }
 
+static const char *Main_SensorIssue(uint32_t now)
+{
+    safety_fault_t fault = Safety_GetFault();
+
+    if (fault == SAFETY_FAULT_PATH_FISH_EXPIRED) return "FISH:TIMEOUT";
+    if (fault == SAFETY_FAULT_PATH_FISH_NOT_READY) return "FISH:NOT READY";
+    if (fault == SAFETY_FAULT_LINE_LOST_TIMEOUT) return "LINE:LOST";
+    if (fault == SAFETY_FAULT_SENSOR_ABNORMAL) {
+        if (!Imu_Sensor.initialized || !Imu_Sensor.data_valid ||
+            Imu_Sensor.calibration_state == IMU_CAL_FAILED) {
+            return "IMU:ERROR";
+        }
+        return "FISH:BUS ERROR";
+    }
+    if (now >= 1000u && !Imu_Sensor.initialized) return "IMU:OFFLINE";
+    if (Imu_Sensor.calibration_state == IMU_CAL_FAILED) return "IMU:CAL FAIL";
+    if (now >= 1000u && Path_Fish_Sensor.frame_seq == 0u) return "FISH:NO DATA";
+    if (Path_Fish_Sensor.frame_seq != 0u && !Path_Fish_IsFresh(now)) {
+        return "FISH:STALE";
+    }
+    return NULL;
+}
+
 static void Main_UpdateOled(uint32_t now)
 {
     char line[17];
+    bool tracking = Track_State_Is_LineTracking(Track.state);
+    bool corner = Track.state == TRACK_STATE_RIGHT_ANGLE;
+    const char *sensor_issue = Main_SensorIssue(now);
 
-    if (s_oled_page == 0u) {
-        (void)snprintf(line, sizeof(line), "M:%03X BC:%02u P:%u",
-                       Path_Fish_Sensor.mask,
-                       Path_Fish_Sensor.black_count,
-                       Path_Fish_Sensor.black_is_one ? 1u : 0u);
-        App_Oled_SetLine(1u, line);
-
-        line[0] = 'A';
-        line[1] = ':';
-        for (uint8_t i = 0u; i < BSP_PATH_FISH_CHANNEL_COUNT; i++) {
-            line[i + 2u] = Path_Fish_Sensor.digital[i] ? '1' : '0';
-        }
-        line[14] = '\0';
-        App_Oled_SetLine(2u, line);
-
-        (void)snprintf(line, sizeof(line), "AGE:%03lu ERR:%04lu",
-                       (unsigned long)(
-                           Path_Fish_FrameAge(now) > 999u
-                               ? 999u : Path_Fish_FrameAge(now)),
-                       (unsigned long)(Path_Fish_Sensor.error_count % 10000u));
-        App_Oled_SetLine(3u, line);
-
-        (void)snprintf(line, sizeof(line), "E:%+05d READY:%u",
-                       (int)(Track.error * 100.0f),
-                       Safety_PathFishReady() ? 1u : 0u);
-        App_Oled_SetLine(4u, line);
+    if (sensor_issue != NULL) {
+        App_Oled_SetLine(1u, "SENSOR:ERROR");
+        App_Oled_SetLine(2u, sensor_issue);
     } else {
-        (void)snprintf(line, sizeof(line), "S:%u E:%+05d",
-                       (unsigned)Track.state,
-                       (int)(Track.error * 100.0f));
+        (void)snprintf(line, sizeof(line), "TRACK:%s", tracking ? "ON" : "OFF");
         App_Oled_SetLine(1u, line);
-        (void)snprintf(line, sizeof(line), "L:%+04ld R:%+04ld",
-                       (long)Track.left_speed, (long)Track.right_speed);
+        (void)snprintf(line, sizeof(line), "CORNER:%s", corner ? "YES" : "NO");
         App_Oled_SetLine(2u, line);
-        (void)snprintf(line, sizeof(line), "C:%u RA:%u BC:%u",
-                       Track.current_circle, Track.right_angle_count,
-                       Path_Fish_Sensor.black_count);
-        App_Oled_SetLine(3u, line);
-        (void)snprintf(line, sizeof(line), "KP:%d KD:%d",
-                       (int)(Track.line_pid.kp * 10.0f),
-                       (int)(Track.line_pid.kd * 10.0f));
-        App_Oled_SetLine(4u, line);
+    }
+    (void)snprintf(line, sizeof(line), "LAPS:%u", Track.current_circle);
+    App_Oled_SetLine(3u, line);
+    line[0] = 'A';
+    line[1] = ':';
+    for (uint8_t i = 0u; i < BSP_PATH_FISH_CHANNEL_COUNT; i++) {
+        line[i + 2u] = Path_Fish_Sensor.digital[i] ? '1' : '0';
+    }
+    line[14] = '\0';
+    App_Oled_SetLine(4u, line);
+}
+
+static void Main_UpdateTrackFeedback(main_runtime_t *runtime, uint32_t now)
+{
+    bool tracking = Track_State_Is_LineTracking(Track.state);
+
+    if (tracking && !runtime->feedback_tracking) {
+        runtime->feedback_tracking = true;
+        runtime->feedback_circle = Track.current_circle;
+        Buzzer_Stop();
+        Buzzer_Request(1u, now);
+    }
+
+    if (runtime->feedback_tracking &&
+        Track.current_circle > runtime->feedback_circle) {
+        uint8_t completed = (uint8_t)(Track.current_circle -
+                                      runtime->feedback_circle);
+        runtime->feedback_circle = Track.current_circle;
+        Buzzer_Request(completed, now);
+    }
+
+    if (runtime->feedback_tracking && !tracking &&
+        Track.state == TRACK_STATE_FINISHED) {
+        runtime->feedback_tracking = false;
+        Buzzer_Stop();
+        Buzzer_Request(3u, now);
     }
 }
 
@@ -758,9 +890,8 @@ static void Main_HandleKeyPush(uint8_t key)
         Track_Stop();
         elog_i("CTRL", "Tracking stopped");
     } else if (key == 2u) {
-        s_oled_page = (uint8_t)((s_oled_page + 1u) % 2u);
         Main_UpdateOled(Bsp_GetTick());
-        elog_i("OLED", "Page=%u", s_oled_page);
+        elog_i("OLED", "Tracking status refreshed");
     } else if (key == 3u && Main_PolarityAllowed()) {
         Path_Fish_ToggleBlackPolarity();
         Safety_ResetPathFishReadiness();
@@ -880,6 +1011,7 @@ static void Main_RunLoop(void)
         /* 事件任务：排空调试串口帧，并推进 ESP/TCP 状态机与遥测队列。 */
         Main_ProcessDebugUart();
         Main_PollCommunication();
+        Main_UpdateTrackFeedback(&runtime, now);
     }
 }
 

@@ -63,8 +63,26 @@
 #ifndef USER_LINE_RECOVERY_MAX_ERROR
 #define USER_LINE_RECOVERY_MAX_ERROR 1.5f  /* 丢线/无效帧沿末次方向低增益找线 */
 #endif
+#ifndef USER_LINE_RECOVERY_KP
+#define USER_LINE_RECOVERY_KP        1.5f  /* 冻结灰度PID后仅保留末次方向比例项 */
+#endif
+#ifndef USER_LINE_RECOVERY_HEADING_KP
+#define USER_LINE_RECOVERY_HEADING_KP 0.30f /* 锁定最后有效鱼眼帧的航向 */
+#endif
+#ifndef USER_LINE_RECOVERY_HEADING_KD
+#define USER_LINE_RECOVERY_HEADING_KD 0.06f /* 角速度阻尼，避免找线时左右摆动 */
+#endif
+#ifndef USER_LINE_RECOVERY_HEADING_LIMIT
+#define USER_LINE_RECOVERY_HEADING_LIMIT 6.0f
+#endif
+#ifndef USER_LINE_RECOVERY_TURN_LIMIT
+#define USER_LINE_RECOVERY_TURN_LIMIT 10.0f
+#endif
+#ifndef USER_LINE_RECOVERY_SPEED
+#define USER_LINE_RECOVERY_SPEED     12     /* 丢线后立即降到可控低速 */
+#endif
 #ifndef USER_LINE_LOST_RECOVERY_MS
-#define USER_LINE_LOST_RECOVERY_MS   150u  /* 最后方向低速找线超时后锁定停车 */
+#define USER_LINE_LOST_RECOVERY_MS   600u  /* 沿最后方向主动找线，超时后再锁定停车 */
 #endif
 
 /* ==================================================================
@@ -99,10 +117,10 @@
 #define USER_MOTOR_SPEED_PID_INTEGRAL_SEP 15.0f /* 积分分离阈值(误差>此值不累加I) */
 #endif
 #ifndef USER_MOTOR_SPEED_SCALE_LEFT
-#define USER_MOTOR_SPEED_SCALE_LEFT   0.161f /* bench regression: PWM20/30/40, GPIO 4x */
+#define USER_MOTOR_SPEED_SCALE_LEFT   0.367f /* raised-wheel PWM20/30/40 regression */
 #endif
 #ifndef USER_MOTOR_SPEED_SCALE_RIGHT
-#define USER_MOTOR_SPEED_SCALE_RIGHT  0.164f /* bench regression: PWM20/30/40, GPIO 4x */
+#define USER_MOTOR_SPEED_SCALE_RIGHT  0.375f /* raised-wheel PWM20/30/40 regression */
 #endif
 #ifndef USER_MOTOR_SPEED_FILTER_ALPHA
 #define USER_MOTOR_SPEED_FILTER_ALPHA 0.20f /* about 20ms time constant at 5ms/tick */
@@ -124,13 +142,13 @@
  * 省一方案: 单圈15秒,说明速度中等,我们用40起步
  * ================================================================== */
 #ifndef USER_TRACK_BASE_SPEED
-#define USER_TRACK_BASE_SPEED      18      /* 12路鱼眼首跑低速安全档 */
+#define USER_TRACK_BASE_SPEED      26      /* 实车循迹起步档 */
 #endif
 #ifndef USER_TRACK_SPEED_STRAIGHT
-#define USER_TRACK_SPEED_STRAIGHT  20      /* 12路鱼眼首跑直道档 */
+#define USER_TRACK_SPEED_STRAIGHT  30      /* 实车直道提速档 */
 #endif
 #ifndef USER_TRACK_SPEED_CURVE
-#define USER_TRACK_SPEED_CURVE     16      /* 12路鱼眼首跑弯道档 */
+#define USER_TRACK_SPEED_CURVE     24      /* 普通偏线减速档 */
 #endif
 #ifndef USER_TRACK_SPEED_RAMP_STEP
 #define USER_TRACK_SPEED_RAMP_STEP 2       /* 速度渐变步进(避免突变抖动) */
@@ -173,7 +191,7 @@
 #define USER_RIGHT_ANGLE_ARM_DELAY  200     /* 启动后短暂稳定，避免漏掉靠近起点的首个角 */
 #endif
 #ifndef USER_RIGHT_ANGLE_TIMEOUT
-#define USER_RIGHT_ANGLE_TIMEOUT   7000    /* PIVOT/CAPTURE单阶段看门狗；超时继续闭环并记录 */
+#define USER_RIGHT_ANGLE_TIMEOUT   3500    /* PIVOT/CAPTURE阶段重新校正周期，不触发停车 */
 #endif
 #ifndef USER_RIGHT_ANGLE_TARGET_ANGLE
 #define USER_RIGHT_ANGLE_TARGET_ANGLE    90.0f /* 逆时针方形赛道固定左转角度 */
@@ -194,10 +212,10 @@
 #define USER_RIGHT_ANGLE_APPROACH_SPEED  28    /* 闭环前探轮速，兼顾距离与停车冲击 */
 #endif
 #ifndef USER_RIGHT_ANGLE_APPROACH_FALLBACK_MS
-#define USER_RIGHT_ANGLE_APPROACH_FALLBACK_MS 1300u /* 实车单角数据微调：预计约1020计数 */
+#define USER_RIGHT_ANGLE_APPROACH_FALLBACK_MS 750u /* 最新整圈日志基础上再增加50ms前探 */
 #endif
 #ifndef USER_RIGHT_ANGLE_STOP_MS
-#define USER_RIGHT_ANGLE_STOP_MS        100u   /* 原地转向前停车稳定 */
+#define USER_RIGHT_ANGLE_STOP_MS         60u   /* 原地转向前短暂停稳 */
 #endif
 #ifndef USER_RIGHT_ANGLE_RETRIGGER_DELAY
 #define USER_RIGHT_ANGLE_RETRIGGER_DELAY 300u /* 出弯后禁止立即重复计角 */
@@ -206,31 +224,19 @@
 #define USER_RIGHT_ANGLE_TURN_LIMIT      18.0f /* 循迹差速限幅 */
 #endif
 #ifndef USER_RIGHT_ANGLE_DONE_ERROR
-#define USER_RIGHT_ANGLE_DONE_ERROR       3.0f /* 到达90度的角度误差 */
+#define USER_RIGHT_ANGLE_DONE_ERROR       1.5f /* 与实测90度原地旋转使用相同误差窗 */
 #endif
 #ifndef USER_RIGHT_ANGLE_DONE_RATE
-#define USER_RIGHT_ANGLE_DONE_RATE       12.0f /* 到位时最大角速度(deg/s) */
+#define USER_RIGHT_ANGLE_DONE_RATE        6.0f /* 到位后必须基本静止(deg/s) */
 #endif
 #ifndef USER_RIGHT_ANGLE_DONE_FRAMES
-#define USER_RIGHT_ANGLE_DONE_FRAMES      4u   /* 角度与角速度连续稳定帧数 */
+#define USER_RIGHT_ANGLE_DONE_FRAMES     20u   /* 连续100ms稳定后才开始寻线 */
 #endif
-#ifndef USER_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG
-#define USER_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG 70.0f /* 此角度后才允许灰度提前接管 */
-#endif
-#ifndef USER_RIGHT_ANGLE_HYBRID_HANDOFF_DEG
-#define USER_RIGHT_ANGLE_HYBRID_HANDOFF_DEG 82.0f /* 不再原地锁死最后几度 */
-#endif
-#ifndef USER_RIGHT_ANGLE_HYBRID_MAX_RATE
-#define USER_RIGHT_ANGLE_HYBRID_MAX_RATE 25.0f /* 接管时最大角速度(deg/s) */
-#endif
-#ifndef USER_RIGHT_ANGLE_HYBRID_MAX_ERROR
-#define USER_RIGHT_ANGLE_HYBRID_MAX_ERROR 20.0f /* PIVOT转CAPTURE允许的最大航向误差 */
-#endif
-#ifndef USER_RIGHT_ANGLE_HYBRID_LINE_FRAMES
-#define USER_RIGHT_ANGLE_HYBRID_LINE_FRAMES 2u /* 新线连续确认帧数 */
+#ifndef USER_RIGHT_ANGLE_SEEK_MIN_TURN_DEG
+#define USER_RIGHT_ANGLE_SEEK_MIN_TURN_DEG 85.0f /* 完整转稳后寻线阶段的姿态保护 */
 #endif
 #ifndef USER_RIGHT_ANGLE_CAPTURE_SPEED
-#define USER_RIGHT_ANGLE_CAPTURE_SPEED    14   /* 混合转弯低速向前捕线 */
+#define USER_RIGHT_ANGLE_CAPTURE_SPEED    18   /* 陀螺仪转稳后向前寻线 */
 #endif
 #ifndef USER_RIGHT_ANGLE_CAPTURE_TURN_LIMIT
 #define USER_RIGHT_ANGLE_CAPTURE_TURN_LIMIT 8.0f
@@ -250,6 +256,9 @@
 #ifndef USER_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES
 #define USER_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES 3u
 #endif
+#ifndef USER_RIGHT_ANGLE_CAPTURE_LINE_ERROR
+#define USER_RIGHT_ANGLE_CAPTURE_LINE_ERROR 3.5f /* 接受边缘正常线型并快速交回完整循迹PID */
+#endif
 #ifndef USER_RIGHT_ANGLE_CAPTURE_MAX_ERROR
 #define USER_RIGHT_ANGLE_CAPTURE_MAX_ERROR 12.0f /* CORNER_DONE时最大航向误差 */
 #endif
@@ -265,7 +274,7 @@
 #define USER_ROTATE_PID_KD_RATE         0.08f  /* wheel-speed / (degree/second) */
 #endif
 #ifndef USER_ROTATE_PID_MAX_SPEED
-#define USER_ROTATE_PID_MAX_SPEED       16.0f
+#define USER_ROTATE_PID_MAX_SPEED       24.0f
 #endif
 #ifndef USER_ROTATE_PID_MIN_SPEED
 #define USER_ROTATE_PID_MIN_SPEED       8
@@ -280,13 +289,13 @@
 #define USER_ROTATE_PID_BLEND_ZONE_DEG   25.0f
 #endif
 #ifndef USER_ROTATE_PID_FINE_MAX_SPEED
-#define USER_ROTATE_PID_FINE_MAX_SPEED    7.0f
+#define USER_ROTATE_PID_FINE_MAX_SPEED    9.0f
 #endif
 #ifndef USER_ROTATE_PID_FINE_MIN_SPEED
 #define USER_ROTATE_PID_FINE_MIN_SPEED   3
 #endif
 #ifndef USER_ROTATE_DONE_ERR_DEG
-#define USER_ROTATE_DONE_ERR_DEG          3.0f
+#define USER_ROTATE_DONE_ERR_DEG          1.5f
 #endif
 #ifndef USER_ROTATE_SPEED_SLEW_STEP
 #define USER_ROTATE_SPEED_SLEW_STEP      1
@@ -301,7 +310,7 @@
 #define USER_ROTATE_STALL_MIN_ERROR_DEG   6.0f /* 小角度命令不启用破静摩擦助推 */
 #endif
 #ifndef USER_ROTATE_STALL_MAX_ERROR_DEG
-#define USER_ROTATE_STALL_MAX_ERROR_DEG  15.0f /* 仅在接近90度目标时助推 */
+#define USER_ROTATE_STALL_MAX_ERROR_DEG 180.0f /* 全角度静止时允许一次破静摩擦助推 */
 #endif
 #ifndef USER_ROTATE_STALL_ENCODER_IDLE_MAX
 #define USER_ROTATE_STALL_ENCODER_IDLE_MAX 1   /* 容忍霍尔边沿量化抖动 */
@@ -310,10 +319,10 @@
 #define USER_ROTATE_STALL_CONFIRM_FRAMES 20u   /* 双编码器+角速度静止100ms */
 #endif
 #ifndef USER_ROTATE_STALL_KICK_SPEED
-#define USER_ROTATE_STALL_KICK_SPEED    20     /* 旋转专用破静摩擦轮速目标 */
+#define USER_ROTATE_STALL_KICK_SPEED    32     /* 落地实测可克服轮胎静摩擦 */
 #endif
 #ifndef USER_ROTATE_STALL_KICK_HOLD_FRAMES
-#define USER_ROTATE_STALL_KICK_HOLD_FRAMES 20u /* 助推至少保持100ms，避免单脉冲回落 */
+#define USER_ROTATE_STALL_KICK_HOLD_FRAMES 40u /* 启动助推保持200ms，确保两轮均越过静摩擦 */
 #endif
 #ifndef USER_ROTATE_STALL_RELEASE_RATE_DEG_S
 #define USER_ROTATE_STALL_RELEASE_RATE_DEG_S 4.0f /* 明确恢复转动后才退出助推 */
@@ -321,11 +330,23 @@
 #ifndef USER_ROTATE_STALL_RELEASE_ENCODER_SPEED
 #define USER_ROTATE_STALL_RELEASE_ENCODER_SPEED 1 /* |encoder_speed|>1视为恢复 */
 #endif
+#ifndef USER_ROTATE_WRONG_WAY_RATE_DEG_S
+#define USER_ROTATE_WRONG_WAY_RATE_DEG_S 15.0f /* 明确反向旋转才触发，滤除静态噪声 */
+#endif
+#ifndef USER_ROTATE_WRONG_WAY_FRAMES
+#define USER_ROTATE_WRONG_WAY_FRAMES       20u /* 连续100ms反向立即停车 */
+#endif
+#ifndef USER_ROTATE_FEEDBACK_GRACE_MS
+#define USER_ROTATE_FEEDBACK_GRACE_MS      150u /* 启动助推后检查双轮累计反馈 */
+#endif
+#ifndef USER_ROTATE_FEEDBACK_MIN_COUNTS
+#define USER_ROTATE_FEEDBACK_MIN_COUNTS      4  /* 低于4个4x边沿视为该轮未启动 */
+#endif
 #ifndef USER_ROTATE_TIMEOUT_BASE_MS
 #define USER_ROTATE_TIMEOUT_BASE_MS     1000u
 #endif
 #ifndef USER_ROTATE_TIMEOUT_PER_DEG_MS
-#define USER_ROTATE_TIMEOUT_PER_DEG_MS  50u
+#define USER_ROTATE_TIMEOUT_PER_DEG_MS 120u
 #endif
 
 /* Current-heading hold uses the rotation PD settings above. */

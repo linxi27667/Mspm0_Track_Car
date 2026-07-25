@@ -112,13 +112,15 @@ GPIO11.associatedPins[1].polarity         = "RISE_FALL";
 
 I2C1.$name                             = "PATH_FISH_I2C";
 I2C1.basicEnableController             = true;
-I2C1.basicControllerBusSpeed           = 400000;
+I2C1.basicControllerBusSpeed           = 100000;
 I2C1.advAnalogGlitchFilter             = "DISABLED";
 I2C1.peripheral.$assign                = "I2C0";
 I2C1.peripheral.sdaPin.$assign         = "PA0";
 I2C1.peripheral.sclPin.$assign         = "PA1";
 I2C1.sdaPinConfig.$name                = "Path_Fish_SDA";
 I2C1.sclPinConfig.$name                = "Path_Fish_SCL";
+I2C1.sdaPinConfig.internalResistor     = "PULL_UP";
+I2C1.sclPinConfig.internalResistor     = "PULL_UP";
 
 I2C2.$name                             = "OLED_I2C";
 I2C2.basicEnableController             = true;

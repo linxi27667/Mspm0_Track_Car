@@ -27,7 +27,7 @@ static safety_fault_t s_fault = SAFETY_FAULT_NONE;
 static uint32_t s_finished_at = 0u;
 
 static bool     s_path_fish_ready = false;
-static uint8_t  s_centered_frames = 0u;
+static uint8_t  s_complete_path_fish_frames = 0u;
 static safety_health_t s_health;
 
 /* ============================================================
@@ -73,7 +73,7 @@ void Safety_Init(void)
     s_fault                = SAFETY_FAULT_NONE;
     s_finished_at          = 0u;
     s_path_fish_ready       = false;
-    s_centered_frames       = 0u;
+    s_complete_path_fish_frames = 0u;
     s_health.path_fish_required = false;
     s_health.path_fish_seen = false;
     s_health.sensor_abnormal = false;
@@ -99,7 +99,7 @@ void Safety_TransitionToReady(void)
     if (s_state == SAFETY_STATE_READY) return;
 
     if (!s_path_fish_ready) {
-        elog_w("SAFETY", "READY blocked: Path Fish not centered/healthy");
+        elog_w("SAFETY", "READY blocked: Path Fish not healthy");
         return;
     }
 
@@ -316,20 +316,22 @@ const char *Safety_FaultName(safety_fault_t fault)
  * 传感器健康更新
  * ============================================================ */
 
-void Safety_NotifyPathFishFrame(uint32_t tick, bool centered_normal)
+void Safety_NotifyPathFishFrame(uint32_t tick, bool complete_frame)
 {
     s_health.last_path_fish_tick = tick;
     s_health.path_fish_seen = true;
 
-    if (centered_normal) {
-        if (s_centered_frames < 255u) s_centered_frames++;
+    if (complete_frame) {
+        if (s_complete_path_fish_frames < 255u) {
+            s_complete_path_fish_frames++;
+        }
     } else {
-        s_centered_frames = 0u;
+        s_complete_path_fish_frames = 0u;
     }
 
-    if (!s_path_fish_ready && s_centered_frames >= 2u) {
+    if (!s_path_fish_ready && s_complete_path_fish_frames >= 2u) {
         s_path_fish_ready = true;
-        elog_i("SAFETY", "Path Fish ready: 2 centered complete frames");
+        elog_i("SAFETY", "Path Fish ready: 2 complete frames");
         if (s_state == SAFETY_STATE_BOOT ||
             s_state == SAFETY_STATE_CALIBRATING) {
             Safety_TransitionToReady();
@@ -340,7 +342,7 @@ void Safety_NotifyPathFishFrame(uint32_t tick, bool centered_normal)
 void Safety_ResetPathFishReadiness(void)
 {
     s_path_fish_ready = false;
-    s_centered_frames = 0u;
+    s_complete_path_fish_frames = 0u;
     if (s_state == SAFETY_STATE_READY) s_state = SAFETY_STATE_BOOT;
     Safety_CutMotor();
 }

@@ -199,13 +199,17 @@ imu_cal_state_t Imu_Calibration_Update(void)
     if (previous != current && current == IMU_CAL_DONE) {
         s_recovery_failures = 0u;
         s_recovery_pending = false;
-        APP_IMU_LOG_I("IMU", "[IMU] gyro calibration done: bias=%.3f dps",
-                      (double)Imu_Sensor.gyro_z_offset);
+        APP_IMU_LOG_I("IMU", "[IMU] gyro calibration done: bias=%.3f noise=%.3f deadzone=%.3f dps rejected=%u",
+                      (double)Imu_Sensor.gyro_z_offset,
+                      (double)Imu_Sensor.gyro_z_noise,
+                      (double)Imu_Sensor.gyro_z_deadzone,
+                      (unsigned)Imu_Sensor.calibration_motion_rejections);
     } else if (previous != current && current == IMU_CAL_FAILED) {
         if (s_recovery_failures < UINT8_MAX) s_recovery_failures++;
-        APP_IMU_LOG_E("IMU", "[IMU] gyro calibration failed: samples=%u read_failures=%u",
+        APP_IMU_LOG_E("IMU", "[IMU] gyro calibration failed: samples=%u read_failures=%u motion_rejections=%u",
                       (unsigned)Imu_Sensor.calibration_sample_count,
-                      (unsigned)Imu_Sensor.calibration_read_failures);
+                      (unsigned)Imu_Sensor.calibration_read_failures,
+                      (unsigned)Imu_Sensor.calibration_motion_rejections);
     }
     return current;
 }
@@ -213,4 +217,9 @@ imu_cal_state_t Imu_Calibration_Update(void)
 bool Imu_Update_Heading(float dt)
 {
     return Bsp_Imu660rb_Update_Heading(&Imu_Sensor, dt);
+}
+
+bool Imu_Update_Stationary(float dt)
+{
+    return Bsp_Imu660rb_Update_Stationary(&Imu_Sensor, dt);
 }

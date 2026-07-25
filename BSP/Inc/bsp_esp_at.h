@@ -26,6 +26,12 @@ typedef enum {
     BSP_ESP_AT_STATE_IPD_DATA,    /* 已解析 +IPD,<len>: 头，按长度收集数据体 */
 } bsp_esp_at_state_t;
 
+typedef enum {
+    BSP_ESP_AT_RESPONSE_PENDING = 0,
+    BSP_ESP_AT_RESPONSE_MATCHED,
+    BSP_ESP_AT_RESPONSE_FAILED,
+} bsp_esp_at_response_t;
+
 /* ============ 引擎上下文 ============ */
 typedef struct {
     bsp_uart_t         *uart;          /* 绑定的 UART 设备（TX/RX 通道） */
@@ -57,12 +63,26 @@ void Bsp_ESP_AT_Init(bsp_esp_at_ctx_t *ctx, bsp_uart_t *uart,
                      uint8_t *ipd_buf, uint16_t ipd_size);
 
 /**
+ * 开始一条 AT 指令，不等待响应。
+ * @return true = 指令已进入 UART DMA 队列；false = UART 尚忙或参数无效
+ * @note 调用方后续必须周期性调用 Bsp_ESP_AT_PollResponse，并自行管理超时。
+ */
+bool Bsp_ESP_AT_BeginCommand(bsp_esp_at_ctx_t *ctx, const char *cmd);
+
+/**
+ * 非阻塞地解析当前 AT 指令的响应。
+ * @return PENDING = 尚未完成；MATCHED = 收到 expect；FAILED = ERROR/FAIL/CLOSED
+ */
+bsp_esp_at_response_t Bsp_ESP_AT_PollResponse(bsp_esp_at_ctx_t *ctx,
+                                               const char *expect);
+
+/**
  * 发送 AT 指令，阻塞等待 expect 或 ERROR/FAIL/timeout
  * @param  cmd       AT 指令字符串（含 \r\n，由调用方拼接）
  * @param  expect    期望响应子串（如 "OK"、"GOT IP"、">"）；NULL 表示不匹配只等超时
  * @param  timeout_ms 超时（ms）
  * @return true = 匹配到 expect；false = 超时或收到 ERROR/FAIL
- * @note   阻塞调用，仅在初始化阶段使用；数据阶段用 Bsp_ESP_AT_Poll
+ * @note   阻塞兼容接口；主循环状态机应使用 BeginCommand + PollResponse。
  */
 bool Bsp_ESP_AT_SendCmd(bsp_esp_at_ctx_t *ctx, const char *cmd,
                         const char *expect, uint32_t timeout_ms);

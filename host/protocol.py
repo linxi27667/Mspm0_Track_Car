@@ -63,6 +63,7 @@ _TELEMETRY_REQUIRED = {
 }
 _TELEMETRY_OPTIONAL = {
     "v", "seq", "ms", "ki", "gd", "vb", "vs", "vc", "rt", "drop",
+    "lp", "rp",
     "tg", "ta", "te", "rr", "hh", "ht", "ha", "he", "hr",
     "mt", "mph", "mtg", "mlp", "mrp", "mrs",
 }
@@ -303,6 +304,9 @@ def validate_telemetry(obj: dict[str, Any]) -> dict[str, Any]:
     _require_number("gz", obj["gz"])
     _require_int("el", obj["el"], -0x80000000, 0x7FFFFFFF)
     _require_int("er", obj["er"], -0x80000000, 0x7FFFFFFF)
+    for field in ("lp", "rp"):
+        if field in obj:
+            _require_int(field, obj[field], -100, 100)
     _require_number("le", obj["le"], -3.5, 3.5)
     _require_number("po", obj["po"], -100.0, 100.0)
     if not isinstance(obj["st"], str) or obj["st"] not in STATE_MAP:

@@ -162,6 +162,67 @@ class PathFishProtocolTests(unittest.TestCase):
             Bsp_PathFish_NotifyTransportFault(&sensor);
             if (!sensor.frame_fault || sensor.error_count != 1u) return 5;
             if (Bsp_PathFish_IsFresh(&sensor, 3u, 50u)) return 6;
+            (void)Bsp_PathFish_AcceptPacket(&sensor, first, 7u, 10u);
+            if (!Bsp_PathFish_AcceptPacket(&sensor, second, 7u, 15u)) return 7;
+            if (sensor.frame_fault) return 8;
+            if (!Bsp_PathFish_IsFresh(&sensor, 15u, 50u)) return 9;
+            return 0;
+            '''
+        )
+
+    def test_white_and_black_calibration_surfaces_require_stable_frames(self):
+        self.assert_c_program(
+            r'''
+            bsp_path_fish_t sensor;
+            const uint8_t white_first[7] = {'#', 0, 0, 0, 0, 0, 0};
+            const uint8_t white_second[7] = {'!', 0, 0, 0, 0, 0, 0};
+            const uint8_t black_first[7] = {'#', 1, 1, 1, 1, 1, 1};
+            const uint8_t black_second[7] = {'!', 1, 1, 1, 1, 1, 1};
+            Bsp_PathFish_Init(&sensor, true);
+            for (uint8_t i = 0u; i < BSP_PATH_FISH_CAL_CONFIRM_FRAMES; i++) {
+                (void)Bsp_PathFish_AcceptPacket(&sensor, white_first, 7u,
+                                                (uint32_t)i * 10u);
+                (void)Bsp_PathFish_AcceptPacket(&sensor, white_second, 7u,
+                                                (uint32_t)i * 10u + 5u);
+                if (i + 1u < BSP_PATH_FISH_CAL_CONFIRM_FRAMES &&
+                    Bsp_PathFish_WhiteSurfaceStable(&sensor)) return 1;
+            }
+            if (!Bsp_PathFish_WhiteSurfaceStable(&sensor)) return 2;
+            if (Bsp_PathFish_BlackSurfaceStable(&sensor)) return 3;
+            if (sensor.mask != 0x000u || sensor.black_count != 0u) return 4;
+            Bsp_PathFish_NotifyTransportFault(&sensor);
+            if (Bsp_PathFish_WhiteSurfaceStable(&sensor)) return 5;
+            for (uint8_t i = 0u; i < BSP_PATH_FISH_CAL_CONFIRM_FRAMES; i++) {
+                (void)Bsp_PathFish_AcceptPacket(&sensor, black_first, 7u,
+                                                200u + (uint32_t)i * 10u);
+                (void)Bsp_PathFish_AcceptPacket(&sensor, black_second, 7u,
+                                                205u + (uint32_t)i * 10u);
+            }
+            if (!Bsp_PathFish_BlackSurfaceStable(&sensor)) return 6;
+            if (Bsp_PathFish_WhiteSurfaceStable(&sensor)) return 7;
+            if (sensor.mask != 0xFFFu || sensor.black_count != 12u) return 8;
+            return 0;
+            '''
+        )
+
+    def test_stream_reassembles_packets_across_misaligned_i2c_reads(self):
+        self.assert_c_program(
+            r'''
+            bsp_path_fish_t sensor;
+            const uint8_t chunk_1[7] = {'1', '1', '1', '1', '1', '#', '1'};
+            const uint8_t chunk_2[7] = {'1', '1', '1', '1', '1', '!', '0'};
+            const uint8_t chunk_3[7] = {'0', '0', '0', '0', '0', '#', '1'};
+            Bsp_PathFish_Init(&sensor, true);
+            if (Bsp_PathFish_AcceptBytes(&sensor, chunk_1, 7u, 0u) != 0u) return 1;
+            if (Bsp_PathFish_AcceptBytes(&sensor, chunk_2, 7u, 5u) != 1u) return 2;
+            if (sensor.valid_packet_count != 1u || sensor.frame_seq != 0u) return 3;
+            if (sensor.first_packet[0] != '#' || sensor.first_packet[6] != '1') return 4;
+            if (Bsp_PathFish_AcceptBytes(&sensor, chunk_3, 7u, 10u) != 1u) return 5;
+            if (sensor.valid_packet_count != 2u || sensor.frame_seq != 1u) return 6;
+            if (sensor.mask != 0x03Fu || sensor.black_count != 6u) return 7;
+            if (sensor.stream_count != 2u || sensor.stream_resync_count != 0u) return 8;
+            Bsp_PathFish_NotifyTransportFault(&sensor);
+            if (sensor.stream_count != 0u) return 9;
             return 0;
             '''
         )
@@ -180,6 +241,33 @@ class PathFishProtocolTests(unittest.TestCase):
         self.assertNotIn("Bsp_PathFish_AcceptPacket", isr)
         self.assertNotIn("elog_", isr)
         self.assertLessEqual(isr.count("DL_I2C_receiveControllerData"), 0)
+
+    def test_hardware_probe_reports_individual_bus_lines_and_first_packet(self):
+        header = (ROOT / "APP" / "Inc" / "app_path_fish.h").read_text(
+            encoding="utf-8"
+        )
+        binding = (ROOT / "APP" / "Src" / "app_path_fish.c").read_text(
+            encoding="utf-8"
+        )
+        main = (ROOT / "main.c").read_text(encoding="utf-8")
+
+        self.assertIn("PATH_FISH_BUS_SCL_HIGH_MASK", header)
+        self.assertIn("PATH_FISH_BUS_SDA_HIGH_MASK", header)
+        self.assertIn("current_bus_monitor", binding)
+        self.assertIn("first_packet", binding)
+        self.assertIn("Bsp_PathFish_AcceptBytes", binding)
+        self.assertIn('"FISH_PROBE"', main)
+        self.assertIn('"FISH_RX"', main)
+        self.assertNotIn('"FISH_DATA"', main)
+
+    def test_path_fish_i2c_speed_matches_sysconfig_and_generated_files(self):
+        syscfg = (ROOT / "TI_moban.syscfg").read_text(encoding="utf-8")
+        header = (ROOT / "ti_msp_dl_config.h").read_text(encoding="utf-8")
+        source = (ROOT / "ti_msp_dl_config.c").read_text(encoding="utf-8")
+
+        self.assertIn("I2C1.basicControllerBusSpeed           = 100000;", syscfg)
+        self.assertIn("PATH_FISH_I2C_BUS_SPEED_HZ                                        100000", header)
+        self.assertIn("DL_I2C_setTimerPeriod(PATH_FISH_I2C_INST, 31);", source)
 
 
 if __name__ == "__main__":

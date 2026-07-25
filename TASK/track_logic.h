@@ -29,6 +29,13 @@ typedef enum {
 } track_corner_phase_t;
 
 typedef enum {
+    TRACK_ROTATE_FEEDBACK_OK = 0,
+    TRACK_ROTATE_FEEDBACK_LEFT_MISSING,
+    TRACK_ROTATE_FEEDBACK_RIGHT_MISSING,
+    TRACK_ROTATE_FEEDBACK_BOTH_MISSING
+} track_rotate_feedback_t;
+
+typedef enum {
     TRACK_LINE_NORMAL = 0,
     TRACK_LINE_LEFT_CORNER,
     TRACK_LINE_RIGHT_CORNER,
@@ -46,13 +53,13 @@ typedef struct {
 #define TRACK_RIGHT_ANGLE_TURN_LIMIT      10.0f
 #endif
 #ifndef TRACK_RIGHT_ANGLE_DONE_ERROR
-#define TRACK_RIGHT_ANGLE_DONE_ERROR       3.0f
+#define TRACK_RIGHT_ANGLE_DONE_ERROR       1.5f
 #endif
 #ifndef TRACK_RIGHT_ANGLE_DONE_RATE
-#define TRACK_RIGHT_ANGLE_DONE_RATE       12.0f
+#define TRACK_RIGHT_ANGLE_DONE_RATE        6.0f
 #endif
 #ifndef TRACK_RIGHT_ANGLE_DONE_FRAMES
-#define TRACK_RIGHT_ANGLE_DONE_FRAMES      4u
+#define TRACK_RIGHT_ANGLE_DONE_FRAMES     20u
 #endif
 
 static inline float Track_Abs_Float(float v)
@@ -94,6 +101,34 @@ static inline bool Track_Rotate_Complete(float angle_error_deg,
 {
     return Track_Rotate_AngleInside(angle_error_deg) &&
            gyro_abs_deg_s <= TRACK_ROTATE_SETTLE_RATE;
+}
+
+static inline bool Track_Rotate_WrongWay(float target_deg,
+                                          float gyro_rate_deg_s,
+                                          float minimum_rate_deg_s)
+{
+    return minimum_rate_deg_s >= 0.0f &&
+           Track_Abs_Float(gyro_rate_deg_s) >= minimum_rate_deg_s &&
+           target_deg * gyro_rate_deg_s < 0.0f;
+}
+
+static inline track_rotate_feedback_t Track_Rotate_FeedbackFault(
+    int32_t left_travel, int32_t right_travel, int32_t minimum_travel)
+{
+    bool left_moved;
+    bool right_moved;
+
+    if (minimum_travel <= 0) return TRACK_ROTATE_FEEDBACK_OK;
+    left_moved = left_travel >= minimum_travel ||
+                 left_travel <= -minimum_travel;
+    right_moved = right_travel >= minimum_travel ||
+                  right_travel <= -minimum_travel;
+    if (left_moved && right_moved) return TRACK_ROTATE_FEEDBACK_OK;
+    if (!left_moved && !right_moved) {
+        return TRACK_ROTATE_FEEDBACK_BOTH_MISSING;
+    }
+    return left_moved ? TRACK_ROTATE_FEEDBACK_RIGHT_MISSING
+                      : TRACK_ROTATE_FEEDBACK_LEFT_MISSING;
 }
 
 static inline uint8_t Track_Rotate_UpdateSettleFrames(uint8_t current,
@@ -175,6 +210,7 @@ static inline void Track_Rotate_Command(float target_deg,
 {
     if (left_speed == 0 || right_speed == 0) return;
 
+    /* Positive heading is a left pivot: left wheel back, right wheel forward. */
     if (target_deg > 0.0f) {
         *left_speed = -speed;
         *right_speed = speed;
@@ -662,6 +698,22 @@ static inline float Track_RightAngle_PivotTurn(float angle_error_deg,
     return Track_ClampTurn(-heading_output, limit);
 }
 
+static inline float Track_LineRecoveryTurn(float last_line_error,
+                                            float heading_error_deg,
+                                            float gyro_rate_deg_s,
+                                            float line_kp,
+                                            float heading_kp,
+                                            float heading_kd,
+                                            float heading_limit,
+                                            float total_limit)
+{
+    float line_turn = line_kp * last_line_error;
+    float heading_turn = Track_RightAngle_PivotTurn(
+        heading_error_deg, gyro_rate_deg_s,
+        heading_kp, heading_kd, heading_limit);
+    return Track_ClampTurn(line_turn + heading_turn, total_limit);
+}
+
 static inline float Track_CaptureBlendTurn(float heading_turn,
                                             float line_error,
                                             bool line_visible,
@@ -710,26 +762,6 @@ static inline bool Track_RightAngle_HeadingSettled(float angle_error_deg,
 {
     return Track_Abs_Float(angle_error_deg) <= TRACK_RIGHT_ANGLE_DONE_ERROR &&
            Track_Abs_Float(gyro_rate_deg_s) <= TRACK_RIGHT_ANGLE_DONE_RATE;
-}
-
-static inline bool Track_RightAngle_HybridHandoff(float turn_progress_deg,
-                                                   float angle_error_deg,
-                                                   float gyro_rate_deg_s,
-                                                   uint8_t line_frames,
-                                                   float min_line_turn_deg,
-                                                   float handoff_turn_deg,
-                                                   float max_line_error_deg,
-                                                   float max_angle_error_deg,
-                                                   float max_rate_deg_s,
-                                                   uint8_t required_line_frames)
-{
-    bool rate_ready = Track_Abs_Float(gyro_rate_deg_s) <= max_rate_deg_s;
-    bool line_ready = turn_progress_deg >= min_line_turn_deg &&
-                      Track_Abs_Float(angle_error_deg) <= max_line_error_deg &&
-                      line_frames >= required_line_frames;
-    bool angle_ready = turn_progress_deg >= handoff_turn_deg &&
-                       Track_Abs_Float(angle_error_deg) <= max_angle_error_deg;
-    return rate_ready && (line_ready || angle_ready);
 }
 
 #endif /* TRACK_LOGIC_H */

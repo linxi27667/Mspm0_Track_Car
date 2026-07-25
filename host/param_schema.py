@@ -77,20 +77,20 @@ PARAM_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "VBASE",
         "macro": "USER_TRACK_BASE_SPEED",
-        "min": 0, "max": 100, "default": 18, "step": 1,
+        "min": 0, "max": 100, "default": 26, "step": 1,
         "desc": "启动基础PWM",
         "kind": "int",
         "help": (
             "启动循迹时的初始基础 PWM（百分比）。"
             "跑起来后会向 VSTR/VCUR 插值目标渐变，不是全程固定车速。"
             "太小：起步无力；太大：一启动就冲，校准/进弯都危险。"
-            "12路鱼眼首跑默认 18，确认能压住线再往上加。"
+            "当前实车默认 26，确认能压住线再继续上调。"
         ),
     },
     {
         "name": "VSTR",
         "macro": "USER_TRACK_SPEED_STRAIGHT",
-        "min": 0, "max": 100, "default": 20, "step": 1,
+        "min": 0, "max": 100, "default": 30, "step": 1,
         "desc": "直道PWM",
         "kind": "int",
         "help": (
@@ -103,7 +103,7 @@ PARAM_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "VCUR",
         "macro": "USER_TRACK_SPEED_CURVE",
-        "min": 0, "max": 100, "default": 16, "step": 1,
+        "min": 0, "max": 100, "default": 24, "step": 1,
         "desc": "偏线/弯道PWM",
         "kind": "int",
         "help": (
@@ -153,7 +153,7 @@ PARAM_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "MSL",
         "macro": "USER_MOTOR_SPEED_SCALE_LEFT",
-        "min": 0.01, "max": 2.0, "default": 0.161, "step": 0.001,
+        "min": 0.01, "max": 2.0, "default": 0.367, "step": 0.001,
         "desc": "左电机前馈比例",
         "kind": "float",
         "help": "左轮编码器计数/周期对应1%PWM的比例尺；架空车轮标定后填写。",
@@ -161,7 +161,7 @@ PARAM_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "MSR",
         "macro": "USER_MOTOR_SPEED_SCALE_RIGHT",
-        "min": 0.01, "max": 2.0, "default": 0.164, "step": 0.001,
+        "min": 0.01, "max": 2.0, "default": 0.375, "step": 0.001,
         "desc": "右电机前馈比例",
         "kind": "float",
         "help": "右轮独立比例尺；架空车轮标定后填写，不与左轮共用。",

@@ -59,9 +59,32 @@ static void Bsp_PathFish_Publish(bsp_path_fish_t *sensor, uint32_t now)
 
     sensor->mask = mask;
     sensor->black_count = black_count;
+    if (black_count <= BSP_PATH_FISH_WHITE_MAX_BLACK)
+    {
+        if (sensor->white_surface_frames < UINT8_MAX)
+        {
+            sensor->white_surface_frames++;
+        }
+    }
+    else
+    {
+        sensor->white_surface_frames = 0u;
+    }
+    if (black_count >= BSP_PATH_FISH_BLACK_MIN_BLACK)
+    {
+        if (sensor->black_surface_frames < UINT8_MAX)
+        {
+            sensor->black_surface_frames++;
+        }
+    }
+    else
+    {
+        sensor->black_surface_frames = 0u;
+    }
     sensor->frame_seq++;
     sensor->last_frame_tick = now;
     sensor->data_ready = true;
+    sensor->frame_fault = false;
     sensor->pending_half = BSP_PATH_FISH_HALF_NONE;
 }
 
@@ -151,6 +174,68 @@ bool Bsp_PathFish_AcceptPacket(bsp_path_fish_t *sensor,
     return true;
 }
 
+uint8_t Bsp_PathFish_AcceptBytes(bsp_path_fish_t *sensor,
+                                 const uint8_t *bytes,
+                                 uint8_t length,
+                                 uint32_t now)
+{
+    uint8_t accepted = 0u;
+    uint8_t index;
+
+    if (sensor == NULL || bytes == NULL)
+    {
+        return 0u;
+    }
+
+    for (index = 0u; index < length; index++)
+    {
+        uint8_t value = bytes[index];
+        uint8_t decoded;
+
+        if (Bsp_PathFish_HeaderToHalf(value) != BSP_PATH_FISH_HALF_NONE)
+        {
+            if (sensor->stream_count != 0u)
+            {
+                sensor->stream_resync_count++;
+                sensor->pending_half = BSP_PATH_FISH_HALF_NONE;
+            }
+            sensor->stream_packet[0] = value;
+            sensor->stream_count = 1u;
+            continue;
+        }
+
+        if (sensor->stream_count == 0u)
+        {
+            continue;
+        }
+        if (!Bsp_PathFish_DecodeBit(value, &decoded))
+        {
+            sensor->stream_count = 0u;
+            sensor->stream_resync_count++;
+            sensor->pending_half = BSP_PATH_FISH_HALF_NONE;
+            continue;
+        }
+
+        sensor->stream_packet[sensor->stream_count] = value;
+        sensor->stream_count++;
+        if (sensor->stream_count == BSP_PATH_FISH_PACKET_SIZE)
+        {
+            if (sensor->valid_packet_count == 0u)
+            {
+                memcpy(sensor->first_packet, sensor->stream_packet,
+                       BSP_PATH_FISH_PACKET_SIZE);
+            }
+            sensor->valid_packet_count++;
+            (void)Bsp_PathFish_AcceptPacket(
+                sensor, sensor->stream_packet, BSP_PATH_FISH_PACKET_SIZE, now);
+            sensor->stream_count = 0u;
+            accepted++;
+        }
+    }
+
+    return accepted;
+}
+
 void Bsp_PathFish_SetBlackPolarity(bsp_path_fish_t *sensor, bool black_is_one)
 {
     if (sensor == NULL || sensor->black_is_one == black_is_one)
@@ -176,6 +261,9 @@ void Bsp_PathFish_NotifyTransportFault(bsp_path_fish_t *sensor)
     sensor->error_count++;
     sensor->frame_fault = true;
     sensor->pending_half = BSP_PATH_FISH_HALF_NONE;
+    sensor->stream_count = 0u;
+    sensor->white_surface_frames = 0u;
+    sensor->black_surface_frames = 0u;
 }
 
 uint32_t Bsp_PathFish_FrameAge(const bsp_path_fish_t *sensor, uint32_t now)
@@ -194,4 +282,16 @@ bool Bsp_PathFish_IsFresh(const bsp_path_fish_t *sensor,
     return sensor != NULL && sensor->frame_seq != 0u &&
            !sensor->frame_fault &&
            Bsp_PathFish_FrameAge(sensor, now) <= timeout_ms;
+}
+
+bool Bsp_PathFish_WhiteSurfaceStable(const bsp_path_fish_t *sensor)
+{
+    return sensor != NULL &&
+           sensor->white_surface_frames >= BSP_PATH_FISH_CAL_CONFIRM_FRAMES;
+}
+
+bool Bsp_PathFish_BlackSurfaceStable(const bsp_path_fish_t *sensor)
+{
+    return sensor != NULL &&
+           sensor->black_surface_frames >= BSP_PATH_FISH_CAL_CONFIRM_FRAMES;
 }

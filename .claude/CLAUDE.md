@@ -59,7 +59,7 @@ python host\simulator.py
 ## Remote Gyro Rotation
 
 - TC1 `cmd:"rotate"` takes a signed nonzero `deg` in the inclusive range `-180..180`: positive is left/counter-clockwise and negative is right/clockwise.
-- Rotation is accepted only from Safety READY with tracking idle and a calibrated, fresh IMU660RB frame. The 5 ms rotation state closes on relative yaw, slows near target, corrects overshoot, and returns to READY after three settled frames.
+- Rotation is accepted only from Safety READY with tracking idle and a calibrated, fresh IMU660RB frame. The 5 ms rotation state closes on relative yaw, slows near target, corrects overshoot, and returns to READY after 20 continuous settled frames (100 ms).
 - A failed IMU660RB read invalidates the current sample and stops rotation. Encoder fault, safety revocation, stop command, and angle timeout also cut motion. Host disconnect or missing heartbeat must not cut motion.
 - Host UI exposes ±90 degree buttons and a custom signed angle. Telemetry rotation fields are `tg`, `ta`, `te`, `rr`; the shared TC1 JSON ceiling is 384 bytes.
 
@@ -68,6 +68,8 @@ python host\simulator.py
 - The SeekFree IMU660RB is based on ST LSM6DSRTR and remains on SPI1: PB6 CS, PB7 MISO, PB8 MOSI, PB9 SCLK.
 - SPI uses Mode 0 at 8 MHz. Firmware verifies `WHO_AM_I=0x6B`, enables register auto-increment and block-data-update, and reads temperature, gyro and accelerometer as one 14-byte little-endian burst from `0x20`.
 - Accelerometer and gyroscope run at 416 Hz with ±4 g and ±500 dps ranges. This keeps fresh samples available to the non-blocking 5 ms control loop.
+- Startup calibration accepts only samples whose acceleration magnitude is near 1 g and whose Z rate is below 3 dps. It derives both the zero-rate offset and a noise-based dead zone; repeated motion or excessive standard deviation fails calibration in bounded time.
+- After calibration, motor-disabled 5 ms ticks confirm 100 stationary samples before slowly adapting the zero-rate offset. Bias learning is frozen whenever motion is authorized. The heading path applies a one-pole rate filter, dynamic dead zone and trapezoidal integration, while qualified stationary samples contribute zero heading drift.
 - Flat `0x00`/`0xFF` frames and transport failures invalidate the sample immediately. Before motor-enabled rotation, bench-check that positive Z yaw still corresponds to the project's positive left/counter-clockwise convention; adjust `IMU660RB_GYRO_Z_SIGN` only if the mounted module reports the opposite sign.
 
 ## First Track Test Profile
@@ -81,8 +83,16 @@ python host\simulator.py
 - Eight-channel masks are classified as normal contiguous line, counter-clockwise left-corner candidate, lost line, or invalid pattern. Normal 1-3 channel runs use the `-3.5..+3.5` centroid; invalid patterns hold one frame and stop on the third consecutive frame.
 - A corner needs two preceding centered frames and three consecutive `0x1E`/`0x1F`-style left-chain frames. `0x0E` and `0x0F` must never trigger a corner.
 - Corner motion is non-blocking: encoder-distance approach with entry-heading hold, 100 ms stop, IMU +90 degree pivot, then three consecutive normal centered capture frames. Only a successful capture increments the corner count.
+- On a short lost/invalid line frame, the line PID is frozen to avoid integrating stale error. The car immediately drops to recovery speed and combines a bounded last-line proportional term with IMU heading P + yaw-rate D control toward the last valid line heading; failure to reacquire within 600 ms stops the car.
+- The right-angle sequence has no stop-producing duration or retry watchdog. A 3.5 s phase timer only alternates capture and heading correction until a normal line is found or the operator stops the run. Path Fish transport faults and unhealthy IMU data still stop immediately.
 - `USER_ENCODER_LEFT_COUNTS_PER_MM`, `USER_ENCODER_RIGHT_COUNTS_PER_MM`, and `USER_SENSOR_TO_AXLE_MM` intentionally default to zero. Straight tracking remains available, but corner entry fails safe with `approach_cal_missing` until all physical values are measured and compiled in.
 - READY requires every grayscale channel to have at least 200 ADC counts between wide-white and wide-black calibration. Line tracking defaults to direct PWM; `USER_TRACK_SPEED_PID_ENABLE` is enabled only after independent left/right wheel calibration.
+- K1 tracking start no longer requires a centered line. READY is established by two fresh complete Path Fish frames; K1 still rejects stale/faulted Path Fish data or an unhealthy IMU, and the running controller still stops on invalid or expired sensor data.
+- Periodic Path Fish and track telemetry is emitted only while line tracking is active. `FISH_PROBE` is edge-triggered on transport state or bus-line changes so a persistent fault cannot flood RTT or ESP logs.
+- OLED is a fixed operational page: tracking active, right-angle sequence active, and completed laps. The non-blocking buzzer emits one pulse on tracking start, one pulse per completed lap, and three pulses when an active tracking run ends.
+- Every debounced key event requests audible feedback, including rejected K1/K2 actions. Sensor faults temporarily replace the first two OLED rows with `SENSOR:ERROR` and a short Fish/IMU reason; laps and the 12-channel pattern remain visible.
+- The 2026-07-25 full-lap trace measured about 1407-1422 encoder counts over the 700 ms fallback with accurate 88-89 degree gyro pivots and 20-25 ms capture handoff. The requested fallback is now 750 ms, the pre-pivot stop is 60 ms, and capture accepts any contiguous normal line up to error 3.5 after three frames before handing control back to the full line PID. Tracking defaults are base 26, straight 30, curve 24, and capture 18.
+- OLED line 4 displays the complete `A1..A12` Path Fish digital pattern as `A:xxxxxxxxxxxx`.
 
 ## Board 1.0 I/O Map
 

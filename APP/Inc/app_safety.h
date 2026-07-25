@@ -71,8 +71,8 @@ const char *Safety_FaultName(safety_fault_t fault);
  * 传感器健康更新 (由各模块调用)
  * ============================================================ */
 
-/* 发布有效鱼眼完整帧，并累计启动所需的连续居中线型。 */
-void Safety_NotifyPathFishFrame(uint32_t tick, bool centered_normal);
+/* 发布有效鱼眼完整帧，并累计启动所需的连续健康帧。 */
+void Safety_NotifyPathFishFrame(uint32_t tick, bool complete_frame);
 void Safety_ResetPathFishReadiness(void);
 bool Safety_PathFishReady(void);
 

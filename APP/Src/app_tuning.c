@@ -651,7 +651,8 @@ void App_Tuning_Poll(void)
         "\"seq\":%lu,\"ms\":%lu,"
         "\"line\":[%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u],"
         "\"lm\":%u,\"bc\":%u,\"sa\":%lu,\"se\":%lu,\"bp\":%u,"
-        "\"gz\":%.2f,\"el\":%d,\"er\":%d,\"le\":%.2f,\"po\":%.2f,"
+        "\"gz\":%.2f,\"el\":%d,\"er\":%d,\"lp\":%ld,\"rp\":%ld,"
+        "\"le\":%.2f,\"po\":%.2f,"
         "\"st\":\"%s\","
         "\"kp\":%.3f,\"ki\":%.3f,\"kd\":%.3f,\"gd\":%.3f,"
         "\"vb\":%d,\"vs\":%d,\"vc\":%d,\"rt\":%.3f,"
@@ -669,6 +670,7 @@ void App_Tuning_Poll(void)
         Path_Fish_Sensor.black_is_one ? 1u : 0u,
         (double)Track.gyro_rate,
         (int)Motor_Left.encoder_speed, (int)Motor_Right.encoder_speed,
+        (long)Motor_Left.current_pwm, (long)Motor_Right.current_pwm,
         (double)Track.error, (double)Track.turn_output,
         state_abbr(Track.state),
         (double)Track.line_pid.kp, (double)Track.line_pid.ki,

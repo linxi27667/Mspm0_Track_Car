@@ -41,6 +41,7 @@
 /* 常用：按看到的 RTT 日志行选择开关。*/
 #define APP_LOG_GRAY_ADC_ENABLE           1  /* 鱼眼12路位图、帧龄和通信错误 */
 #define APP_LOG_GRAY_STATE_ENABLE         1  /* 鱼眼初始化、极性与线型诊断 */
+#define APP_PATH_FISH_I2C_DIAG_ENABLE     0  /* 临时隐藏鱼眼I2C重复日志和OLED错误状态 */
 #define APP_LOG_ROTATE_ENABLE             1  /* 原地旋转：拒绝原因、开始、结束结果和最终角度 */
 
 /* 高级：定位通信、驱动或循迹状态机问题时再打开。*/

@@ -34,11 +34,29 @@
 #define IMU660RB_RESET_POLL_MS         2u
 #define IMU660RB_TURN_ON_MS            35u
 
+#define IMU660RB_ACCEL_G_PER_LSB            0.000122f
+#define IMU660RB_GYRO_DPS_PER_LSB           0.0175f
+#define IMU660RB_TEMP_C_PER_LSB             (1.0f / 256.0f)
+#define IMU660RB_TEMP_OFFSET_C              25.0f
+#define IMU660RB_FRAME_BYTES                14u
+
 #define IMU660RB_CALIB_SAMPLES             200u
-#define IMU660RB_CALIB_MAX_STD_DPS         5.0f
+#define IMU660RB_CALIB_MAX_STD_DPS         0.8f
 #define IMU660RB_CALIB_MAX_READ_FAILURES   20u
-#define IMU660RB_GYRO_DEADZONE_DPS         0.05f
-#define IMU660RB_GYRO_Z_SIGN               1.0f
+#define IMU660RB_CALIB_MAX_MOTION_REJECTIONS 200u
+#define IMU660RB_CALIB_GYRO_MAX_DPS        3.0f
+#define IMU660RB_STATIONARY_ACCEL_MIN_G2   0.81f
+#define IMU660RB_STATIONARY_ACCEL_MAX_G2   1.21f
+
+#define IMU660RB_GYRO_FILTER_ALPHA         0.35f
+#define IMU660RB_GYRO_DEADZONE_MIN_DPS     0.05f
+#define IMU660RB_GYRO_DEADZONE_MAX_DPS     0.50f
+#define IMU660RB_GYRO_DEADZONE_NOISE_GAIN  3.0f
+#define IMU660RB_BIAS_STATIONARY_RATE_DPS  0.8f
+#define IMU660RB_BIAS_CONFIRM_SAMPLES      100u
+#define IMU660RB_BIAS_ADAPT_ALPHA          0.0025f
+#define IMU660RB_BIAS_MAX_STEP_DPS         0.001f
+#define IMU660RB_GYRO_Z_SIGN              -1.0f
 
 typedef enum {
     IMU_CAL_IDLE = 0,
@@ -72,8 +90,13 @@ typedef struct {
     float gyro_x;
     float gyro_y;
     float gyro_z;
+    float gyro_z_raw;
     float temp;
     float gyro_z_offset;
+    float gyro_z_noise;
+    float gyro_z_deadzone;
+    float gyro_z_filtered;
+    float gyro_z_previous;
     float heading;
 
     bool initialized;
@@ -89,8 +112,13 @@ typedef struct {
 
     uint16_t calibration_sample_count;
     uint8_t calibration_read_failures;
+    uint16_t calibration_motion_rejections;
     float calibration_mean;
     float calibration_m2;
+    uint16_t stationary_sample_count;
+    uint32_t bias_update_count;
+    bool gyro_filter_initialized;
+    bool stationary_confirmed;
 } imu_sensor_t;
 
 bool Bsp_Imu660rb_Init_Device(imu_sensor_t *imu);
@@ -99,5 +127,6 @@ bool Bsp_Imu660rb_Read_Data(imu_sensor_t *imu);
 void Bsp_Imu660rb_Calibration_Start(imu_sensor_t *imu);
 imu_cal_state_t Bsp_Imu660rb_Calibration_Update(imu_sensor_t *imu);
 bool Bsp_Imu660rb_Update_Heading(imu_sensor_t *imu, float dt);
+bool Bsp_Imu660rb_Update_Stationary(imu_sensor_t *imu, float dt);
 
 #endif /* BSP_IMU660RB_H */

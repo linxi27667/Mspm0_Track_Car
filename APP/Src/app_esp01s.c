@@ -263,7 +263,54 @@ static uint32_t s_ipd_dispatch_count = 0;
 static uint32_t s_uart_baud = ESP01S_BAUD_115200;
 static uint32_t s_conn_fail_count = 0;
 
+static bool s_conn_at_waiting = false;
+static uint32_t s_conn_at_deadline = 0;
+
 static void tx_queue_clear(void);
+
+typedef enum {
+    CONN_AT_PENDING = 0,
+    CONN_AT_OK,
+    CONN_AT_FAILED,
+} conn_at_result_t;
+
+static void conn_at_cancel(void)
+{
+    s_conn_at_waiting = false;
+}
+
+static bool conn_at_start(const char *cmd, uint32_t timeout_ms)
+{
+    if (!Bsp_ESP_AT_BeginCommand(&g_esp_at, cmd)) {
+        return false;
+    }
+    s_conn_at_waiting = true;
+    s_conn_at_deadline = Bsp_GetTick() + timeout_ms;
+    return true;
+}
+
+static conn_at_result_t conn_at_poll(const char *expect)
+{
+    bsp_esp_at_response_t result;
+
+    if (!s_conn_at_waiting) {
+        return CONN_AT_FAILED;
+    }
+    result = Bsp_ESP_AT_PollResponse(&g_esp_at, expect);
+    if (result == BSP_ESP_AT_RESPONSE_MATCHED) {
+        s_conn_at_waiting = false;
+        return CONN_AT_OK;
+    }
+    if (result == BSP_ESP_AT_RESPONSE_FAILED ||
+        (int32_t)(Bsp_GetTick() - s_conn_at_deadline) >= 0) {
+        if (result == BSP_ESP_AT_RESPONSE_PENDING) {
+            g_esp_at.at_fail_count++;
+        }
+        s_conn_at_waiting = false;
+        return CONN_AT_FAILED;
+    }
+    return CONN_AT_PENDING;
+}
 
 static void esp_log_at_diag(const char *stage)
 {
@@ -300,6 +347,7 @@ static void conn_notify_progress(uint8_t step, const char *msg)
 
 static void conn_enter_backoff(void)
 {
+    conn_at_cancel();
     s_conn_fail_count++;
     s_wifi_connected = false;
     s_tcp_connected  = false;
@@ -314,6 +362,7 @@ static void conn_enter_backoff(void)
 
 static void conn_enter_escape(const char *reason)
 {
+    conn_at_cancel();
     tx_queue_clear();
     s_transparent_mode = false;
     s_transparent_rx_len = 0;
@@ -739,10 +788,15 @@ static void conn_step_escape(void)
         return;
     }
 
-    if (Bsp_ESP_AT_SendCmd(&g_esp_at, "AT\r\n", "OK", ESP01S_AT_TIMEOUT_SHORT)) {
+    if (!s_conn_at_waiting) {
+        (void)conn_at_start("AT\r\n", ESP01S_AT_TIMEOUT_SHORT);
+        return;
+    }
+
+    if (conn_at_poll("OK") == CONN_AT_OK) {
         APP_ESP_LOG_I(LOG_TAG, "escape probe ready, start AT init");
         conn_enter_at_init_after_escape();
-    } else {
+    } else if (!s_conn_at_waiting) {
         APP_ESP_LOG_W(LOG_TAG, "escape probe no response, enter backoff");
         conn_enter_backoff();
     }
@@ -750,7 +804,7 @@ static void conn_step_escape(void)
 
 static void conn_step_at_init(void)
 {
-    bool ok;
+    conn_at_result_t result;
     switch (s_conn_step) {
     case 0:
         /* Do not issue a naked AT probe: this state is only entered after
@@ -760,28 +814,42 @@ static void conn_step_at_init(void)
 
     case 1:
         /* 关回显（非关键，失败跳过） */
-        (void)Bsp_ESP_AT_SendCmd(&g_esp_at, "ATE0\r\n", "OK", ESP01S_AT_TIMEOUT_SHORT);
-        s_conn_step = 2;
+        if (!s_conn_at_waiting) {
+            (void)conn_at_start("ATE0\r\n", ESP01S_AT_TIMEOUT_SHORT);
+            break;
+        }
+        result = conn_at_poll("OK");
+        if (result != CONN_AT_PENDING) {
+            s_conn_step = 2;
+        }
         break;
 
     case 2:
-        ok = Bsp_ESP_AT_SendCmd(&g_esp_at, "AT+CWMODE=1\r\n", "OK", ESP01S_AT_TIMEOUT_SHORT);
-        if (ok) {
+        if (!s_conn_at_waiting) {
+            (void)conn_at_start("AT+CWMODE=1\r\n", ESP01S_AT_TIMEOUT_SHORT);
+            break;
+        }
+        result = conn_at_poll("OK");
+        if (result == CONN_AT_OK) {
             s_conn_step = 3;
-        } else {
+        } else if (result == CONN_AT_FAILED) {
             APP_ESP_LOG_W(LOG_TAG, "CWMODE fail, escape before retry");
             conn_enter_backoff();
         }
         break;
 
     case 3:
-        ok = Bsp_ESP_AT_SendCmd(&g_esp_at, "AT+CWDHCP=1,1\r\n", "OK", ESP01S_AT_TIMEOUT_SHORT);
-        if (ok) {
+        if (!s_conn_at_waiting) {
+            (void)conn_at_start("AT+CWDHCP=1,1\r\n", ESP01S_AT_TIMEOUT_SHORT);
+            break;
+        }
+        result = conn_at_poll("OK");
+        if (result == CONN_AT_OK) {
             APP_ESP_LOG_I(LOG_TAG, "AT init done, connecting WiFi");
             s_conn_state = ESP_CONN_WIFI;
             s_conn_step = 0;
             conn_notify_progress(2, "WiFi connecting");
-        } else {
+        } else if (result == CONN_AT_FAILED) {
             APP_ESP_LOG_W(LOG_TAG, "CWDHCP fail, escape before retry");
             conn_enter_backoff();
         }
@@ -796,20 +864,25 @@ static void conn_step_at_init(void)
 static void conn_step_wifi(void)
 {
     char cmd[96];
+    conn_at_result_t result;
     snprintf(cmd, sizeof(cmd), "AT+CWJAP=\"%s\",\"%s\"\r\n",
              ESP01S_WIFI_SSID, ESP01S_WIFI_PASS);
 
     /* ESP emits "WIFI GOT IP" before its final "OK". Waiting for the
      * terminal response prevents the next AT command from colliding with it. */
-    bool ok = Bsp_ESP_AT_SendCmd(&g_esp_at, cmd, "OK", ESP01S_AT_TIMEOUT_LONG);
-    if (ok) {
+    if (!s_conn_at_waiting) {
+        (void)conn_at_start(cmd, ESP01S_AT_TIMEOUT_LONG);
+        return;
+    }
+    result = conn_at_poll("OK");
+    if (result == CONN_AT_OK) {
         s_wifi_connected = true;
         s_backoff_idx = 0;  /* WiFi 成功，重置退避 */
         APP_ESP_LOG_I(LOG_TAG, "WiFi connected, SSID=%s", ESP01S_WIFI_SSID);
         s_conn_state = ESP_CONN_TCP;
         s_conn_step = 0;
         conn_notify_progress(3, "TCP connecting");
-    } else {
+    } else if (result == CONN_AT_FAILED) {
         APP_ESP_LOG_W(LOG_TAG, "CWJAP fail, escape before retry, SSID=%s",
                ESP01S_WIFI_SSID);
         conn_enter_backoff();
@@ -818,15 +891,22 @@ static void conn_step_wifi(void)
 
 static void conn_step_tcp(void)
 {
-    bool ok;
+    conn_at_result_t result;
     switch (s_conn_step) {
     case 0: {
         const char *line;
         /* A known CLOSED/ERROR reply means there is no old socket to close.
          * A timeout is different: recover through +++ before issuing CIPMUX. */
-        ok = Bsp_ESP_AT_SendCmd(&g_esp_at, "AT+CIPCLOSE\r\n", "OK", ESP01S_AT_TIMEOUT_SHORT);
+        if (!s_conn_at_waiting) {
+            (void)conn_at_start("AT+CIPCLOSE\r\n", ESP01S_AT_TIMEOUT_SHORT);
+            break;
+        }
+        result = conn_at_poll("OK");
+        if (result == CONN_AT_PENDING) {
+            break;
+        }
         line = Bsp_ESP_AT_GetLine(&g_esp_at);
-        if (!ok && (line == NULL ||
+        if (result != CONN_AT_OK && (line == NULL ||
                     (strstr(line, "CLOSED") == NULL && strstr(line, "ERROR") == NULL))) {
             APP_ESP_LOG_W(LOG_TAG, "CIPCLOSE no response, escape before retry");
             conn_enter_backoff();
@@ -837,20 +917,28 @@ static void conn_step_tcp(void)
     }
 
     case 1:
-        ok = Bsp_ESP_AT_SendCmd(&g_esp_at, "AT+CIPMUX=0\r\n", "OK", ESP01S_AT_TIMEOUT_SHORT);
-        if (ok) {
+        if (!s_conn_at_waiting) {
+            (void)conn_at_start("AT+CIPMUX=0\r\n", ESP01S_AT_TIMEOUT_SHORT);
+            break;
+        }
+        result = conn_at_poll("OK");
+        if (result == CONN_AT_OK) {
             s_conn_step = 2;
-        } else {
+        } else if (result == CONN_AT_FAILED) {
             APP_ESP_LOG_W(LOG_TAG, "CIPMUX fail, escape before retry");
             conn_enter_backoff();
         }
         break;
 
     case 2:
-        ok = Bsp_ESP_AT_SendCmd(&g_esp_at, "AT+CIPMODE=1\r\n", "OK", ESP01S_AT_TIMEOUT_SHORT);
-        if (ok) {
+        if (!s_conn_at_waiting) {
+            (void)conn_at_start("AT+CIPMODE=1\r\n", ESP01S_AT_TIMEOUT_SHORT);
+            break;
+        }
+        result = conn_at_poll("OK");
+        if (result == CONN_AT_OK) {
             s_conn_step = 3;
-        } else {
+        } else if (result == CONN_AT_FAILED) {
             APP_ESP_LOG_W(LOG_TAG, "CIPMODE fail, escape before retry");
             conn_enter_backoff();
         }
@@ -862,10 +950,14 @@ static void conn_step_tcp(void)
                  ESP01S_SERVER_IP, ESP01S_SERVER_PORT);
         /* "CONNECT" is an intermediate notification; wait for command OK
          * before allowing CIPSEND or host traffic on the new socket. */
-        ok = Bsp_ESP_AT_SendCmd(&g_esp_at, cmd, "OK", ESP01S_AT_TIMEOUT_CONNECT);
-        if (ok) {
+        if (!s_conn_at_waiting) {
+            (void)conn_at_start(cmd, ESP01S_AT_TIMEOUT_CONNECT);
+            break;
+        }
+        result = conn_at_poll("OK");
+        if (result == CONN_AT_OK) {
             s_conn_step = 4;
-        } else {
+        } else if (result == CONN_AT_FAILED) {
             APP_ESP_LOG_W(LOG_TAG, "CIPSTART fail, escape before retry, server=%s:%d",
                    ESP01S_SERVER_IP, ESP01S_SERVER_PORT);
             conn_enter_backoff();
@@ -874,9 +966,12 @@ static void conn_step_tcp(void)
     }
 
     case 4:
-        ok = Bsp_ESP_AT_SendCmd(&g_esp_at, "AT+CIPSEND\r\n", ">",
-                                ESP01S_AT_TIMEOUT_SHORT);
-        if (ok) {
+        if (!s_conn_at_waiting) {
+            (void)conn_at_start("AT+CIPSEND\r\n", ESP01S_AT_TIMEOUT_SHORT);
+            break;
+        }
+        result = conn_at_poll(">");
+        if (result == CONN_AT_OK) {
             s_transparent_mode = true;
             s_transparent_rx_len = 0;
             s_tcp_connected = true;
@@ -889,7 +984,7 @@ static void conn_step_tcp(void)
             APP_ESP_LOG_I(LOG_TAG, "TCP connected, server=%s:%d — ONLINE",
                    ESP01S_SERVER_IP, ESP01S_SERVER_PORT);
             conn_notify_progress(4, "ESP01S ready");
-        } else {
+        } else if (result == CONN_AT_FAILED) {
             APP_ESP_LOG_W(LOG_TAG, "transparent CIPSEND fail, escape before retry");
             conn_enter_backoff();
         }
@@ -1011,6 +1106,7 @@ bool App_ESP01S_Init(App_ESP01S_ProgressCb progress)
     s_transparent_mode = false;
     s_transparent_rx_len = 0;
     tx_queue_clear();
+    conn_at_cancel();
 
     /* 初始化 ESP UART（UART1 + DMA） */
     Bsp_UART_Init(&ESP_Uart_Dev);

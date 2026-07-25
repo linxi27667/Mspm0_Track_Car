@@ -19,5 +19,6 @@ bool Imu_Read_Data(void);
 void Imu_Calibration_Start(void);
 imu_cal_state_t Imu_Calibration_Update(void);
 bool Imu_Update_Heading(float dt);
+bool Imu_Update_Stationary(float dt);
 
 #endif /* APP_IMU_H */

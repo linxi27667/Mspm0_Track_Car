@@ -120,6 +120,7 @@ static void Track_BeginRightAngle(uint32_t now, uint16_t digital_mask,
     Track.state = TRACK_STATE_RIGHT_ANGLE;
     Track.corner_phase = TRACK_CORNER_APPROACH;
     Track.corner_started_at = now;
+    Track.corner_retry_count = 0u;
     Track.state_timer = now;
     Track.right_angle_confirm = 0;
     Track.corner_heading_settle_confirm = 0;
@@ -272,9 +273,11 @@ static void Track_Rotate_End(const char *result)
                      (int)Track.rotate_error_deg);
     Track.rotate_result = result;
     Track.rotate_settle_frames = 0;
+    Track.rotate_wrong_way_frames = 0;
     Track.rotate_stall_frames = 0;
     Track.rotate_stall_kick_frames = 0;
     Track.rotate_stall_kick_active = false;
+    Track.rotate_feedback_checked = false;
     Track.state = TRACK_STATE_IDLE;
     Track.left_speed = 0;
     Track.right_speed = 0;
@@ -294,7 +297,7 @@ static void Track_Rotate_End(const char *result)
 }
 
 /* Angle P plus measured yaw-rate D. Do not use Pid_Compute here: its D term
- * is a per-control-tick angle difference, while MPU gyro_z is the physical
+ * is a per-control-tick angle difference, while IMU gyro_z is the physical
  * derivative required to brake the chassis before it reaches the target. */
 static void Track_Apply_Rotate_PD(float angle_error_deg, float gyro_rate_deg_s,
                                   float max_speed, int32_t min_speed,
@@ -431,6 +434,49 @@ static void Track_Handle_Rotate(void)
     if (Track_Rotate_Timeout(now, Track.rotate_started_at,
                              Track.rotate_timeout_ms)) {
         Track_Rotate_End("rotate_timeout");
+        return;
+    }
+
+    if (!Track.rotate_feedback_checked &&
+        Track_Timeout_Reached(now, Track.rotate_started_at,
+                              USER_ROTATE_FEEDBACK_GRACE_MS)) {
+        int32_t left_travel = (int32_t)(
+            (uint32_t)Motor_Left.total_position -
+            (uint32_t)Track.rotate_left_start_position);
+        int32_t right_travel = (int32_t)(
+            (uint32_t)Motor_Right.total_position -
+            (uint32_t)Track.rotate_right_start_position);
+        track_rotate_feedback_t feedback = Track_Rotate_FeedbackFault(
+            left_travel, right_travel, USER_ROTATE_FEEDBACK_MIN_COUNTS);
+        Track.rotate_feedback_checked = true;
+        if (feedback != TRACK_ROTATE_FEEDBACK_OK) {
+            const char *result = feedback == TRACK_ROTATE_FEEDBACK_LEFT_MISSING
+                               ? "left_wheel_no_feedback"
+                               : feedback == TRACK_ROTATE_FEEDBACK_RIGHT_MISSING
+                               ? "right_wheel_no_feedback"
+                               : "wheel_feedback_missing";
+            APP_ROTATE_LOG_W("ROTATE", "abort feedback=%d travel=%ld,%ld pwm=%ld,%ld",
+                             (int)feedback, (long)left_travel,
+                             (long)right_travel,
+                             (long)Motor_Left.current_pwm,
+                             (long)Motor_Right.current_pwm);
+            Track_Rotate_End(result);
+            return;
+        }
+    }
+
+    Track.rotate_wrong_way_frames = Track_UpdateConfirmFrames(
+        Track.rotate_wrong_way_frames,
+        Track_Rotate_WrongWay(Track.rotate_target_deg, Imu_Sensor.gyro_z,
+                              USER_ROTATE_WRONG_WAY_RATE_DEG_S));
+    if (Track.rotate_wrong_way_frames >= USER_ROTATE_WRONG_WAY_FRAMES) {
+        APP_ROTATE_LOG_W("ROTATE", "abort wrong_way target=%d actual=%d rate=%d enc=%ld,%ld",
+                         (int)Track.rotate_target_deg,
+                         (int)Track.rotate_actual_deg,
+                         (int)Imu_Sensor.gyro_z,
+                         (long)Motor_Left.encoder_speed,
+                         (long)Motor_Right.encoder_speed);
+        Track_Rotate_End("rotate_wrong_direction");
         return;
     }
 
@@ -772,7 +818,7 @@ static void Track_Handle_RightAngle(track_line_observation_t observation,
     bool approach_time_reached = Track_Timeout_Reached(
         now, Track.corner_started_at,
         TRACK_RIGHT_ANGLE_APPROACH_FALLBACK_MS);
-    /* 编码器是首选距离依据，1300ms始终作为硬兜底，防止编码器符号、
+    /* 编码器是首选距离依据，时间上限始终作为硬兜底，防止编码器符号、
      * 比例或接线异常时APPROACH无限直行。 */
     bool approach_done = encoder_distance_reached || approach_time_reached;
 
@@ -814,34 +860,12 @@ static void Track_Handle_RightAngle(track_line_observation_t observation,
         Track.right_angle_entry_heading, Imu_Sensor.heading,
         Track.corner_turn_sign);
     if (Track.corner_phase == TRACK_CORNER_PIVOT) {
-        bool line_visible_after_turn =
-            turn_progress >= TRACK_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG &&
-            Track_CaptureLineValid(observation, 1.0f);
-
         Track.corner_heading_settle_confirm = Track_UpdateConfirmFrames(
             Track.corner_heading_settle_confirm,
             Track_RightAngle_HeadingSettled(angle_error,
                                             Imu_Sensor.gyro_z));
-        if (line_frame_fresh) {
-            Track.capture_confirm = Track_UpdateConfirmFrames(
-                Track.capture_confirm, line_visible_after_turn);
-        }
         if (Track.corner_heading_settle_confirm >=
-                TRACK_RIGHT_ANGLE_DONE_FRAMES ||
-            Track_RightAngle_HybridHandoff(
-                turn_progress, angle_error, Imu_Sensor.gyro_z,
-                Track.capture_confirm,
-                TRACK_RIGHT_ANGLE_HYBRID_MIN_TURN_DEG,
-                TRACK_RIGHT_ANGLE_HYBRID_HANDOFF_DEG,
-                TRACK_RIGHT_ANGLE_HYBRID_MAX_ERROR,
-                TRACK_RIGHT_ANGLE_CAPTURE_MAX_ERROR,
-                TRACK_RIGHT_ANGLE_HYBRID_MAX_RATE,
-                TRACK_RIGHT_ANGLE_HYBRID_LINE_FRAMES)) {
-            const char *reason = Track.capture_confirm >=
-                                 TRACK_RIGHT_ANGLE_HYBRID_LINE_FRAMES
-                               ? "line" :
-                                 (turn_progress >= TRACK_RIGHT_ANGLE_HYBRID_HANDOFF_DEG
-                                  ? "angle" : "settled");
+                TRACK_RIGHT_ANGLE_DONE_FRAMES) {
             Track.corner_phase = TRACK_CORNER_CAPTURE;
             Track.rotate_stall_frames = 0u;
             Track.rotate_stall_kick_frames = 0u;
@@ -849,8 +873,8 @@ static void Track_Handle_RightAngle(track_line_observation_t observation,
             Track.corner_started_at = now;
             Track.state_timer = now;
             Track.capture_confirm = 0u;
-            APP_TRACK_LOG_I("TRACK", "CORNER_CAPTURE reason=%s dir=%c mask=0x%03X enc_d=%ld,%ld target=%d actual=%d heading_err_deg=%d progress_deg=%d rate=%d",
-                            reason, Track.corner_turn_sign > 0 ? 'L' : 'R',
+            APP_TRACK_LOG_I("TRACK", "CORNER_CAPTURE reason=gyro_settled dir=%c mask=0x%03X enc_d=%ld,%ld target=%d actual=%d heading_err_deg=%d progress_deg=%d rate=%d",
+                            Track.corner_turn_sign > 0 ? 'L' : 'R',
                             Track.line_mask, (long)left_delta,
                             (long)right_delta, (int)Track.right_angle_target,
                             (int)Imu_Sensor.heading, (int)angle_error,
@@ -860,6 +884,7 @@ static void Track_Handle_RightAngle(track_line_observation_t observation,
     }
 
     if (Track.corner_phase == TRACK_CORNER_CAPTURE &&
+        observation.type != TRACK_LINE_NORMAL &&
         Track_Abs_Float(angle_error) >
             TRACK_RIGHT_ANGLE_CAPTURE_REPIVOT_ERROR) {
         Track.corner_phase = TRACK_CORNER_PIVOT;
@@ -908,7 +933,7 @@ static void Track_Handle_RightAngle(track_line_observation_t observation,
             TRACK_RIGHT_ANGLE_CAPTURE_HEADING_LIMIT);
         bool line_blend_allowed = Track_CornerCapturePoseValid(
             turn_progress, angle_error,
-            TRACK_RIGHT_ANGLE_HYBRID_HANDOFF_DEG,
+            TRACK_RIGHT_ANGLE_SEEK_MIN_TURN_DEG,
             TRACK_RIGHT_ANGLE_CAPTURE_MAX_ERROR) &&
             observation.type == TRACK_LINE_NORMAL;
         float blended_turn = Track_CaptureBlendTurn(
@@ -927,9 +952,10 @@ static void Track_Handle_RightAngle(track_line_observation_t observation,
             Track.capture_confirm,
             Track_CornerCapturePoseValid(
                 turn_progress, angle_error,
-                TRACK_RIGHT_ANGLE_HYBRID_HANDOFF_DEG,
+                TRACK_RIGHT_ANGLE_SEEK_MIN_TURN_DEG,
                 TRACK_RIGHT_ANGLE_CAPTURE_MAX_ERROR) &&
-            Track_CaptureLineValid(observation, 1.0f));
+            Track_CaptureLineValid(
+                observation, TRACK_RIGHT_ANGLE_CAPTURE_LINE_ERROR));
     }
     if (Track.corner_phase == TRACK_CORNER_CAPTURE &&
         Track.capture_confirm >= TRACK_RIGHT_ANGLE_CAPTURE_CONFIRM_FRAMES) {
@@ -945,6 +971,8 @@ static void Track_Handle_RightAngle(track_line_observation_t observation,
         Track.centered_history = 0;
         Track.centered_evidence_valid = false;
         Track.last_corner_completed_at = now;
+        Track.line_heading_reference = Imu_Sensor.heading;
+        Track.line_heading_reference_valid = true;
         if (Track.right_angle_count < UINT16_MAX) {
             Track.right_angle_count++;
         }
@@ -961,6 +989,9 @@ static void Track_Handle_RightAngle(track_line_observation_t observation,
 
     if (Track_Timeout_Reached(now, Track.state_timer,
                               TRACK_RIGHT_ANGLE_TIMEOUT)) {
+        if (Track.corner_retry_count < UINT8_MAX) {
+            Track.corner_retry_count++;
+        }
         if (Track.corner_phase == TRACK_CORNER_CAPTURE) {
             Track.corner_phase = TRACK_CORNER_PIVOT;
             Track.state_timer = now;
@@ -1040,10 +1071,10 @@ static void Track_Motor_Output(void)
         Track.right_speed = Track.base_speed - (int32_t)Track.turn_output;
     }
 
-    /* 内侧电机最低速度限制（不允许反转，避免急转抖动）
-     * 修复: 原代码双 if 互斥条件在两轮都低于 MIN 时均不执行，
-     * 导致内侧电机可反转。改为分别钳位。 */
-    if (!pivot_turn && !capture_turn &&
+    /* 开环时用最低有效PWM防止内侧轮停转；闭环的目标是轮速而不是PWM，
+     * 最低驱动已经由速度环输出级处理，不能在这里把12/16/20等低速目标
+     * 强行抬成24，否则弯道档和丢线低速档都会失效。 */
+    if (!Track.use_speed_pid && !pivot_turn && !capture_turn &&
         (Track.left_speed != 0 || Track.right_speed != 0)) {
         if (Track.left_speed  < TRACK_MOTOR_INNER_MIN) Track.left_speed  = TRACK_MOTOR_INNER_MIN;
         if (Track.right_speed < TRACK_MOTOR_INNER_MIN) Track.right_speed = TRACK_MOTOR_INNER_MIN;
@@ -1078,6 +1109,7 @@ void Track_Init(void)
     Track.tracking_started_at = 0;
     Track.last_corner_completed_at = 0;
     Track.corner_started_at = 0;
+    Track.corner_retry_count = 0;
     Track.corner_phase       = TRACK_CORNER_APPROACH;
     Track.line_type          = TRACK_LINE_LOST;
     Track.line_mask          = 0u;
@@ -1087,6 +1119,8 @@ void Track_Init(void)
     Track.last_corner_direction_at = 0u;
     Track.last_corner_direction = 0;
     Track.gyro_rate          = 0;
+    Track.line_heading_reference = 0;
+    Track.line_heading_reference_valid = false;
     Track.rotate_heading_baseline = 0;
     Track.rotate_target_deg  = 0;
     Track.rotate_actual_deg  = 0;
@@ -1094,9 +1128,13 @@ void Track_Init(void)
     Track.rotate_started_at  = 0;
     Track.rotate_timeout_ms  = 0;
     Track.rotate_settle_frames = 0;
+    Track.rotate_wrong_way_frames = 0;
     Track.rotate_stall_frames = 0;
     Track.rotate_stall_kick_frames = 0;
     Track.rotate_stall_kick_active = false;
+    Track.rotate_left_start_position = 0;
+    Track.rotate_right_start_position = 0;
+    Track.rotate_feedback_checked = false;
     Track.rotate_result      = "idle";
     Track.heading_hold_target = 0;
     Track.heading_hold_actual = 0;
@@ -1245,6 +1283,10 @@ void Track_Update(void)
             Pid_Reset(&Track.line_pid);
         }
         Track_Calc_Error(observation);
+        if (observation.type == TRACK_LINE_NORMAL) {
+            Track.line_heading_reference = Imu_Sensor.heading;
+            Track.line_heading_reference_valid = true;
+        }
 
         if (Track.state == TRACK_STATE_LINE_FOLLOW) {
             int8_t direction = Track_CornerDirectionFromMask12(Track.line_mask);
@@ -1263,27 +1305,46 @@ void Track_Update(void)
 
     /* ⑧ 状态机处理 */
     switch (Track.state) {
-    case TRACK_STATE_LINE_FOLLOW:
+    case TRACK_STATE_LINE_FOLLOW: {
         /* 国一方案: LINE_FOLLOW 串级混合控制
          * 主控: 灰度 PID 输出位置转向量 (line_turn)
          * 阻尼: 陀螺仪角速度抑制灰度传感器噪声引起的左右抖动 (gyro_damp)
-         * 极性: 实测左转 gyro_z>0，而左转差速输出<0，因此阻尼项取正号
-         * 效果: 直行稳(抖动被阻尼), 弯道灵(角速度小阻尼小不影响跟踪)
-         * IMU 失效时由本节拍入口立即停车，禁止使用陈旧航向。 */
-        {
-        float control_error = Track.line_type == TRACK_LINE_NORMAL
-                            ? Track.error
-                            : Track_LimitRecoveryError(
-                                  Track.error, USER_LINE_RECOVERY_MAX_ERROR);
-        float line_turn = Pid_Compute(&Track.line_pid, control_error, 0.0f);
-        float damping = (Track.use_gyro && Track_Imu_Healthy())
-                      ? Track.gyro_damp : 0.0f;
-        Track.turn_output = Track_ClampTurn(
-            Track_LineTurn_WithGyroDamping(
-                line_turn, Track.gyro_rate, damping),
-            TRACK_RIGHT_ANGLE_TURN_LIMIT);
+        * 极性: 实测左转 gyro_z>0，而左转差速输出<0，因此阻尼项取正号
+        * 效果: 直行稳(抖动被阻尼), 弯道灵(角速度小阻尼小不影响跟踪)
+        * IMU 失效时由本节拍入口立即停车，禁止使用陈旧航向。 */
+        if (Track.line_type == TRACK_LINE_NORMAL) {
+            float line_turn = Pid_Compute(
+                &Track.line_pid, Track.error, 0.0f);
+            float damping = (Track.use_gyro && Track_Imu_Healthy())
+                          ? Track.gyro_damp : 0.0f;
+            Track.turn_output = Track_ClampTurn(
+                Track_LineTurn_WithGyroDamping(
+                    line_turn, Track.gyro_rate, damping),
+                TRACK_RIGHT_ANGLE_TURN_LIMIT);
+        } else {
+            float recovery_error = Track_LimitRecoveryError(
+                Track.error, USER_LINE_RECOVERY_MAX_ERROR);
+            float heading_error =
+                Track.line_heading_reference_valid
+              ? Track.line_heading_reference - Imu_Sensor.heading
+              : 0.0f;
+            Track.turn_output = Track_LineRecoveryTurn(
+                recovery_error, heading_error, Track.gyro_rate,
+                USER_LINE_RECOVERY_KP,
+                USER_LINE_RECOVERY_HEADING_KP,
+                USER_LINE_RECOVERY_HEADING_KD,
+                USER_LINE_RECOVERY_HEADING_LIMIT,
+                USER_LINE_RECOVERY_TURN_LIMIT);
+            Track.target_speed = USER_LINE_RECOVERY_SPEED;
+            if (Track.base_speed > Track.target_speed) {
+                Track.base_speed -= TRACK_SPEED_RAMP_STEP;
+                if (Track.base_speed < Track.target_speed) {
+                    Track.base_speed = Track.target_speed;
+                }
+            }
         }
         break;
+    }
 
     case TRACK_STATE_RIGHT_ANGLE:
         Track_Handle_RightAngle(observation, line_frame_fresh);
@@ -1309,8 +1370,6 @@ bool Track_Start(void)
 {
     uint32_t now = Bsp_GetTick();
     uint16_t start_mask = Track_PathFishMask();
-    track_line_observation_t start_line = Track_ClassifyLine12(
-        start_mask, Track.error, Track_CornerMinBlack());
 
     s_track_start_result = "rejected";
     if (!Track_Imu_Healthy()) {
@@ -1326,13 +1385,9 @@ bool Track_Start(void)
         return false;
     }
 
-    if (!Safety_PathFishReady() ||
-        start_line.type != TRACK_LINE_NORMAL ||
-        Track_Abs_Float(start_line.error) > 0.75f) {
-        s_track_start_result = "path_fish_not_centered";
-        APP_TRACK_LOG_W("TRACK",
-                        "Start rejected: Path Fish not centered mask=0x%03X err=%d",
-                        start_mask, (int)(start_line.error * 1000.0f));
+    if (!Safety_PathFishReady()) {
+        s_track_start_result = "path_fish_not_ready";
+        APP_TRACK_LOG_W("TRACK", "Start rejected: Path Fish not ready");
         return false;
     }
 
@@ -1366,6 +1421,9 @@ bool Track_Start(void)
     Track.line_type = TRACK_LINE_NORMAL;
     Track.corner_phase = TRACK_CORNER_APPROACH;
     Track.last_corner_completed_at = 0;
+    Track.corner_retry_count = 0;
+    Track.line_heading_reference = Imu_Sensor.heading;
+    Track.line_heading_reference_valid = true;
     Pid_Reset(&Track.line_pid);
     if (Track.use_motor) {
         Motor_Set_Speed(0);
@@ -1469,9 +1527,13 @@ bool Track_Start_Rotation(float target_deg)
     Track.rotate_timeout_ms = USER_ROTATE_TIMEOUT_BASE_MS +
                               target_abs * USER_ROTATE_TIMEOUT_PER_DEG_MS;
     Track.rotate_settle_frames = 0;
+    Track.rotate_wrong_way_frames = 0;
     Track.rotate_stall_frames = 0;
     Track.rotate_stall_kick_frames = 0;
-    Track.rotate_stall_kick_active = false;
+    Track.rotate_stall_kick_active = true;
+    Track.rotate_left_start_position = Motor_Left.total_position;
+    Track.rotate_right_start_position = Motor_Right.total_position;
+    Track.rotate_feedback_checked = false;
     Track.rotate_result = "running";
     Track.state = TRACK_STATE_ROTATE;
     Track.left_speed = 0;

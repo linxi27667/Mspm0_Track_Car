@@ -94,8 +94,9 @@ static int32_t HW_Enc_Read_Right(void *enc_timer)
 /* ================= 2. 对象实例化与引脚拼装 ================= */
 
 bsp_motor_t Motor_Left = {
-    .input1_pwm = {MOTOR_LEFT_AIN1_PWM_TIMER, MOTOR_LEFT_AIN1_PWM_CHANNEL},
-    .input2_pwm = {MOTOR_LEFT_AIN2_PWM_TIMER, MOTOR_LEFT_AIN2_PWM_CHANNEL},
+    /* Left motor is mirrored: logical positive drives physical AIN2. */
+    .input1_pwm = {MOTOR_LEFT_AIN2_PWM_TIMER, MOTOR_LEFT_AIN2_PWM_CHANNEL},
+    .input2_pwm = {MOTOR_LEFT_AIN1_PWM_TIMER, MOTOR_LEFT_AIN1_PWM_CHANNEL},
     .enc_timer  = NULL,
     .use_speed_pid = false,
 

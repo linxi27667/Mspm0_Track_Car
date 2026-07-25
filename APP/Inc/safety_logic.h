@@ -20,7 +20,7 @@ typedef struct {
 static inline bool Safety_Logic_CanEnterRotation(uint8_t state)
 {
     /* Rotation is IMU/encoder based and does not consume line sensor data.
-     * BOOT here means that no healthy centered Path Fish startup evidence exists;
+     * BOOT here means that no healthy complete Path Fish startup evidence exists;
      * the caller still validates IMU health. */
     return state == 0u || state == 2u; /* BOOT or READY */
 }

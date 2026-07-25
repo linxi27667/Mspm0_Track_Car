@@ -6,6 +6,7 @@
   python host/cli_debug.py cmd start               # 下发指令
   python host/cli_debug.py cmd stop
   python host/cli_debug.py rotate 90               # 旋转 90 度
+  python host/cli_debug.py motor_test               # 架空轮子电机测试
   python host/cli_debug.py tele 5                  # 监听 5 秒遥测
 """
 import sys
@@ -52,7 +53,11 @@ def main():
     def on_tele(data):
         line = (f"tele: t={data.get('t')} st={data.get('st')} le={data.get('le')} "
                 f"po={data.get('po')} gz={data.get('gz')} el={data.get('el')} er={data.get('er')} "
-                f"kp={data.get('kp')} kd={data.get('kd')} vb={data.get('vb')} vs={data.get('vs')} vc={data.get('vc')}")
+                f"lp={data.get('lp')} rp={data.get('rp')} "
+                f"tg={data.get('tg')} ta={data.get('ta')} te={data.get('te')} rr={data.get('rr')} "
+                f"kp={data.get('kp')} kd={data.get('kd')} vb={data.get('vb')} vs={data.get('vs')} vc={data.get('vc')} "
+                f"mt={data.get('mt')} mph={data.get('mph')} mtg={data.get('mtg')} "
+                f"mlp={data.get('mlp')} mrp={data.get('mrp')} mrs={data.get('mrs')}")
         tele_buf.append(line)
 
     @sio.on("log")
@@ -97,6 +102,10 @@ def main():
         print(f"send_rotate: {deg}")
         sio.emit("send_rotate", {"deg": deg})
         time.sleep(2.0)
+    elif action == "motor_test":
+        print("send_motor_test: lifted=true")
+        sio.emit("send_motor_test", {"lifted": True})
+        time.sleep(15.0)
     elif action == "tele":
         secs = int(sys.argv[2]) if len(sys.argv) > 2 else 5
         print(f"监听遥测 {secs} 秒...")

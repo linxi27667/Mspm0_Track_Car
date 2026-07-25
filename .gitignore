@@ -58,3 +58,8 @@ keil/EventRecorderStub.scvd
 keil/JLinkSettings.ini
 keil/*.uvguix.*
 docs/pinout_mapping.md
+
+# Local hardware captures and vendor reference packages
+/logs/
+/docs/鱼眼循迹模块.zip
+/docs/鱼眼循迹模块/

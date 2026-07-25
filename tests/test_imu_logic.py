@@ -169,6 +169,12 @@ class ImuLogicTests(unittest.TestCase):
         )[0]
         self.assertIn("App_Imu_Recovery_Update(now, Safety_AllowsMotorOutput())",
                       control)
+        self.assertIn("!Safety_AllowsMotorOutput()", control)
+        self.assertIn("Imu_Update_Stationary(0.005f)", control)
+        self.assertLess(
+            control.index("!Safety_AllowsMotorOutput()"),
+            control.index("Imu_Update_Stationary(0.005f)"),
+        )
 
     def test_init_checks_identity_and_programs_expected_range_and_odr(self):
         result = compile_and_run(r'''
@@ -243,7 +249,7 @@ class ImuLogicTests(unittest.TestCase):
                 if (!nearf(sensor.accel_x, 1.0f, 0.001f)) return 4;
                 if (!nearf(sensor.accel_y, -1.0f, 0.001f)) return 5;
                 if (!nearf(sensor.accel_z, 2.0f, 0.001f)) return 6;
-                if (!nearf(sensor.gyro_z, 100.0f, 0.02f)) return 7;
+                if (!nearf(sensor.gyro_z, -100.0f, 0.02f)) return 7;
                 if (!nearf(sensor.temp, 25.0f, 0.01f)) return 8;
                 force_transfer_failure = true;
                 if (Bsp_Imu660rb_Read_Data(&sensor)) return 9;
@@ -267,11 +273,13 @@ class ImuLogicTests(unittest.TestCase):
                     if (Bsp_Imu660rb_Calibration_Update(&sensor) == IMU_CAL_FAILED) return 2;
                 }
                 if (sensor.calibration_state != IMU_CAL_DONE) return 3;
-                if (!nearf(sensor.gyro_z_offset, 58.0f * 0.0175f, 0.001f)) return 4;
+                if (!nearf(sensor.gyro_z_offset, -58.0f * 0.0175f, 0.001f)) return 4;
+                if (!nearf(sensor.gyro_z_deadzone,
+                           IMU660RB_GYRO_DEADZONE_MIN_DPS, 0.001f)) return 8;
                 set_s16_le(IMU660RB_OUT_TEMP_L + 6u, 5772);
                 if (!Bsp_Imu660rb_Update_Heading(&sensor, 0.005f)) return 5;
-                if (!nearf(sensor.gyro_z, 100.0f, 0.03f)) return 6;
-                if (!nearf(sensor.heading, 0.5f, 0.002f)) return 7;
+                if (!nearf(sensor.gyro_z, -100.0f, 0.03f)) return 6;
+                if (!nearf(sensor.heading, -0.5f, 0.002f)) return 7;
                 return 0;
             }
         ''')
@@ -301,6 +309,75 @@ class ImuLogicTests(unittest.TestCase):
                     (void)Bsp_Imu660rb_Calibration_Update(&sensor);
                 }
                 if (sensor.calibration_state != IMU_CAL_FAILED) return 6;
+                return 0;
+            }
+        ''')
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+    def test_calibration_rejects_motion_and_fails_in_bounded_time(self):
+        result = compile_and_run(r'''
+            int main(void)
+            {
+                imu_sensor_t sensor = make_sensor();
+                unsigned i;
+                if (!Bsp_Imu660rb_Init_Device(&sensor)) return 1;
+                set_s16_le(IMU660RB_OUT_TEMP_L + 6u, 229);
+                set_s16_le(IMU660RB_OUT_TEMP_L + 12u, 8197);
+                Bsp_Imu660rb_Calibration_Start(&sensor);
+                for (i = 0; i < IMU660RB_CALIB_MAX_MOTION_REJECTIONS; i++) {
+                    (void)Bsp_Imu660rb_Calibration_Update(&sensor);
+                }
+                if (sensor.calibration_state != IMU_CAL_FAILED) return 2;
+                if (sensor.calibration_sample_count != 0u) return 3;
+                if (sensor.calibration_motion_rejections !=
+                    IMU660RB_CALIB_MAX_MOTION_REJECTIONS) return 4;
+                if (sensor.data_valid) return 5;
+                return 0;
+            }
+        ''')
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+    def test_stationary_bias_adapts_but_is_frozen_during_motion(self):
+        result = compile_and_run(r'''
+            int main(void)
+            {
+                imu_sensor_t sensor = make_sensor();
+                unsigned i;
+                float stationary_bias;
+
+                if (!Bsp_Imu660rb_Init_Device(&sensor)) return 1;
+                set_s16_le(IMU660RB_OUT_TEMP_L + 12u, 8197);
+                Bsp_Imu660rb_Calibration_Start(&sensor);
+                for (i = 0; i < IMU660RB_CALIB_SAMPLES; i++) {
+                    if (Bsp_Imu660rb_Calibration_Update(&sensor) ==
+                        IMU_CAL_FAILED) return 2;
+                }
+                if (sensor.calibration_state != IMU_CAL_DONE) return 3;
+
+                set_s16_le(IMU660RB_OUT_TEMP_L + 6u, 23);
+                for (i = 0; i < IMU660RB_BIAS_CONFIRM_SAMPLES - 1u; i++) {
+                    if (!Bsp_Imu660rb_Update_Stationary(&sensor, 0.005f)) return 4;
+                }
+                if (sensor.stationary_confirmed) return 5;
+                if (sensor.bias_update_count != 0u) return 6;
+
+                for (i = 0; i < 200u; i++) {
+                    if (!Bsp_Imu660rb_Update_Stationary(&sensor, 0.005f)) return 7;
+                }
+                if (!sensor.stationary_confirmed) return 8;
+                if (sensor.bias_update_count == 0u) return 9;
+                if (sensor.gyro_z_offset >= -0.05f ||
+                    sensor.gyro_z_offset <= -0.40f) return 10;
+                if (!nearf(sensor.heading, 0.0f, 0.001f)) return 15;
+
+                stationary_bias = sensor.gyro_z_offset;
+                set_s16_le(IMU660RB_OUT_TEMP_L + 6u, 2000);
+                for (i = 0; i < 20u; i++) {
+                    if (!Bsp_Imu660rb_Update_Heading(&sensor, 0.005f)) return 11;
+                }
+                if (sensor.stationary_confirmed) return 12;
+                if (!nearf(sensor.gyro_z_offset, stationary_bias, 0.000001f)) return 13;
+                if (sensor.heading >= -1.0f) return 14;
                 return 0;
             }
         ''')

@@ -21,7 +21,7 @@
 #define MOTOR_RIGHT_BIN2_PWM_TIMER  Motor_Right_BIN2_Timer_INST
 #define MOTOR_RIGHT_BIN2_PWM_CHANNEL GPIO_Motor_Right_BIN2_Timer_C1_IDX
 
-/* SysConfig edge-aligned down-count PWM uses CC=period-duty. */
+/* SysConfig edge-aligned PWM uses the requested duty as its CC value. */
 #define MOTOR_PWM_PERIOD             100u
 
 /* ============ 编码器硬件配置（统一GPIO 4x正交解码） ============
@@ -37,9 +37,9 @@
 #define RIGHT_ENC_PHB_PORT          Right_Encoder_PORT
 #define RIGHT_ENC_PHB_PIN           Right_Encoder_PHB_PIN
 
-/* 保持现有接线下“车轮正转=正计数”的符号约定。 */
-#define LEFT_ENC_FORWARD_SIGN       (-1)
-#define RIGHT_ENC_FORWARD_SIGN      (1)
+/* 归一化为“车辆前进=正计数”；左右电机为镜像安装。 */
+#define LEFT_ENC_FORWARD_SIGN       (1)
+#define RIGHT_ENC_FORWARD_SIGN      (-1)
 
 /* ============ 速度PID参数 ============
  * 级联控制: 位置PID(循迹) → 目标速度 → 速度PID → PWM

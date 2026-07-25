@@ -7,12 +7,6 @@
 #include <math.h>
 #include <stddef.h>
 
-#define IMU660RB_ACCEL_G_PER_LSB   0.000122f
-#define IMU660RB_GYRO_DPS_PER_LSB  0.0175f
-#define IMU660RB_TEMP_C_PER_LSB    (1.0f / 256.0f)
-#define IMU660RB_TEMP_OFFSET_C     25.0f
-#define IMU660RB_FRAME_BYTES       14u
-
 static void Bsp_Imu660rb_End_Transaction(imu_sensor_t *imu)
 {
     imu->Cs_Write(true);
@@ -86,6 +80,37 @@ static bool Bsp_Imu660rb_Frame_Is_Flat(const uint8_t *raw, uint8_t value)
     return true;
 }
 
+static float Bsp_Imu660rb_Abs(float value)
+{
+    return value >= 0.0f ? value : -value;
+}
+
+static float Bsp_Imu660rb_Clamp(float value, float limit)
+{
+    if (value > limit) {
+        return limit;
+    }
+    if (value < -limit) {
+        return -limit;
+    }
+    return value;
+}
+
+static bool Bsp_Imu660rb_Accel_Is_Stationary(const imu_sensor_t *imu)
+{
+    float magnitude_squared;
+
+    if (imu == NULL) {
+        return false;
+    }
+    magnitude_squared = imu->accel_x * imu->accel_x +
+                        imu->accel_y * imu->accel_y +
+                        imu->accel_z * imu->accel_z;
+    return isfinite(magnitude_squared) &&
+           magnitude_squared >= IMU660RB_STATIONARY_ACCEL_MIN_G2 &&
+           magnitude_squared <= IMU660RB_STATIONARY_ACCEL_MAX_G2;
+}
+
 const char *Bsp_Imu660rb_Init_Result_Name(imu660rb_init_result_t result)
 {
     switch (result) {
@@ -130,7 +155,15 @@ bool Bsp_Imu660rb_Init_Device(imu_sensor_t *imu)
     imu->init_ctrl4_c = 0u;
     imu->init_ctrl9_xl = 0u;
     imu->gyro_z_offset = 0.0f;
+    imu->gyro_z_noise = 0.0f;
+    imu->gyro_z_deadzone = IMU660RB_GYRO_DEADZONE_MIN_DPS;
+    imu->gyro_z_filtered = 0.0f;
+    imu->gyro_z_previous = 0.0f;
     imu->heading = 0.0f;
+    imu->stationary_sample_count = 0u;
+    imu->bias_update_count = 0u;
+    imu->gyro_filter_initialized = false;
+    imu->stationary_confirmed = false;
 
     if (imu->Spi_Transfer == NULL || imu->Cs_Write == NULL ||
         imu->Delay_ms == NULL) {
@@ -284,8 +317,9 @@ bool Bsp_Imu660rb_Read_Data(imu_sensor_t *imu)
     imu->accel_z = (float)raw_az * IMU660RB_ACCEL_G_PER_LSB;
     imu->gyro_x = (float)raw_gx * IMU660RB_GYRO_DPS_PER_LSB;
     imu->gyro_y = (float)raw_gy * IMU660RB_GYRO_DPS_PER_LSB;
-    imu->gyro_z = (float)raw_gz * IMU660RB_GYRO_DPS_PER_LSB *
-                  IMU660RB_GYRO_Z_SIGN;
+    imu->gyro_z_raw = (float)raw_gz * IMU660RB_GYRO_DPS_PER_LSB *
+                      IMU660RB_GYRO_Z_SIGN;
+    imu->gyro_z = imu->gyro_z_raw;
     imu->data_valid = isfinite(imu->temp) &&
                       isfinite(imu->accel_x) && isfinite(imu->accel_y) &&
                       isfinite(imu->accel_z) && isfinite(imu->gyro_x) &&
@@ -300,9 +334,18 @@ void Bsp_Imu660rb_Calibration_Start(imu_sensor_t *imu)
     }
     imu->calibration_sample_count = 0u;
     imu->calibration_read_failures = 0u;
+    imu->calibration_motion_rejections = 0u;
     imu->calibration_mean = 0.0f;
     imu->calibration_m2 = 0.0f;
     imu->gyro_z_offset = 0.0f;
+    imu->gyro_z_noise = 0.0f;
+    imu->gyro_z_deadzone = IMU660RB_GYRO_DEADZONE_MIN_DPS;
+    imu->gyro_z_filtered = 0.0f;
+    imu->gyro_z_previous = 0.0f;
+    imu->stationary_sample_count = 0u;
+    imu->bias_update_count = 0u;
+    imu->gyro_filter_initialized = false;
+    imu->stationary_confirmed = false;
     imu->calibration_state = imu->initialized ? IMU_CAL_RUNNING : IMU_CAL_FAILED;
 }
 
@@ -330,10 +373,24 @@ imu_cal_state_t Bsp_Imu660rb_Calibration_Update(imu_sensor_t *imu)
     }
 
     imu->calibration_read_failures = 0u;
+    if (!Bsp_Imu660rb_Accel_Is_Stationary(imu) ||
+        Bsp_Imu660rb_Abs(imu->gyro_z_raw) >
+            IMU660RB_CALIB_GYRO_MAX_DPS) {
+        if (imu->calibration_motion_rejections < UINT16_MAX) {
+            imu->calibration_motion_rejections++;
+        }
+        if (imu->calibration_motion_rejections >=
+            IMU660RB_CALIB_MAX_MOTION_REJECTIONS) {
+            imu->calibration_state = IMU_CAL_FAILED;
+            imu->data_valid = false;
+        }
+        return imu->calibration_state;
+    }
+
     imu->calibration_sample_count++;
-    delta = imu->gyro_z - imu->calibration_mean;
+    delta = imu->gyro_z_raw - imu->calibration_mean;
     imu->calibration_mean += delta / (float)imu->calibration_sample_count;
-    delta2 = imu->gyro_z - imu->calibration_mean;
+    delta2 = imu->gyro_z_raw - imu->calibration_mean;
     imu->calibration_m2 += delta * delta2;
 
     if (imu->calibration_sample_count >= IMU660RB_CALIB_SAMPLES) {
@@ -344,15 +401,32 @@ imu_cal_state_t Bsp_Imu660rb_Calibration_Update(imu_sensor_t *imu)
             imu->data_valid = false;
         } else {
             imu->gyro_z_offset = imu->calibration_mean;
+            imu->gyro_z_noise = std_dev;
+            imu->gyro_z_deadzone =
+                std_dev * IMU660RB_GYRO_DEADZONE_NOISE_GAIN;
+            if (imu->gyro_z_deadzone <
+                IMU660RB_GYRO_DEADZONE_MIN_DPS) {
+                imu->gyro_z_deadzone =
+                    IMU660RB_GYRO_DEADZONE_MIN_DPS;
+            } else if (imu->gyro_z_deadzone >
+                       IMU660RB_GYRO_DEADZONE_MAX_DPS) {
+                imu->gyro_z_deadzone =
+                    IMU660RB_GYRO_DEADZONE_MAX_DPS;
+            }
+            imu->gyro_z_filtered = 0.0f;
+            imu->gyro_z_previous = 0.0f;
+            imu->gyro_filter_initialized = false;
             imu->calibration_state = IMU_CAL_DONE;
         }
     }
     return imu->calibration_state;
 }
 
-bool Bsp_Imu660rb_Update_Heading(imu_sensor_t *imu, float dt)
+static bool Bsp_Imu660rb_Update_Heading_Internal(imu_sensor_t *imu, float dt,
+                                                 bool stationary_hint)
 {
-    float gyro_for_heading;
+    float corrected_rate;
+    bool stationary_sample;
 
     if (imu == NULL || !imu->initialized ||
         imu->calibration_state != IMU_CAL_DONE || !isfinite(dt) || dt <= 0.0f ||
@@ -363,16 +437,63 @@ bool Bsp_Imu660rb_Update_Heading(imu_sensor_t *imu, float dt)
         return false;
     }
 
-    imu->gyro_z -= imu->gyro_z_offset;
-    gyro_for_heading = imu->gyro_z;
-    if (gyro_for_heading > -IMU660RB_GYRO_DEADZONE_DPS &&
-        gyro_for_heading < IMU660RB_GYRO_DEADZONE_DPS) {
-        gyro_for_heading = 0.0f;
+    corrected_rate = imu->gyro_z_raw - imu->gyro_z_offset;
+    stationary_sample =
+        stationary_hint &&
+        Bsp_Imu660rb_Accel_Is_Stationary(imu) &&
+        Bsp_Imu660rb_Abs(corrected_rate) <=
+            IMU660RB_BIAS_STATIONARY_RATE_DPS;
+    if (stationary_sample) {
+        if (imu->stationary_sample_count < UINT16_MAX) {
+            imu->stationary_sample_count++;
+        }
+    } else {
+        imu->stationary_sample_count = 0u;
     }
-    imu->heading += gyro_for_heading * dt;
+    imu->stationary_confirmed =
+        imu->stationary_sample_count >= IMU660RB_BIAS_CONFIRM_SAMPLES;
+
+    if (imu->stationary_confirmed) {
+        float bias_step = Bsp_Imu660rb_Clamp(
+            corrected_rate * IMU660RB_BIAS_ADAPT_ALPHA,
+            IMU660RB_BIAS_MAX_STEP_DPS);
+        imu->gyro_z_offset += bias_step;
+        corrected_rate = imu->gyro_z_raw - imu->gyro_z_offset;
+        if (imu->bias_update_count < UINT32_MAX) {
+            imu->bias_update_count++;
+        }
+    }
+
+    if (!imu->gyro_filter_initialized) {
+        imu->gyro_z_filtered = corrected_rate;
+        imu->gyro_z_previous = stationary_sample ? 0.0f : corrected_rate;
+        imu->gyro_filter_initialized = true;
+    } else {
+        imu->gyro_z_filtered += IMU660RB_GYRO_FILTER_ALPHA *
+                                (corrected_rate -
+                                 imu->gyro_z_filtered);
+    }
+
+    imu->gyro_z = imu->gyro_z_filtered;
+    if (stationary_sample ||
+        Bsp_Imu660rb_Abs(imu->gyro_z) <= imu->gyro_z_deadzone) {
+        imu->gyro_z = 0.0f;
+    }
+    imu->heading += (imu->gyro_z_previous + imu->gyro_z) * 0.5f * dt;
+    imu->gyro_z_previous = imu->gyro_z;
     if (!isfinite(imu->heading)) {
         imu->data_valid = false;
         return false;
     }
     return true;
+}
+
+bool Bsp_Imu660rb_Update_Heading(imu_sensor_t *imu, float dt)
+{
+    return Bsp_Imu660rb_Update_Heading_Internal(imu, dt, false);
+}
+
+bool Bsp_Imu660rb_Update_Stationary(imu_sensor_t *imu, float dt)
+{
+    return Bsp_Imu660rb_Update_Heading_Internal(imu, dt, true);
 }

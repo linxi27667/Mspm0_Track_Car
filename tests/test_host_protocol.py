@@ -197,6 +197,8 @@ class TelemetryTests(unittest.TestCase):
             drop=2,
             sa=9,
             se=3,
+            lp=24,
+            rp=-31,
         )
         self.assertEqual(parse_telemetry(extended), extended)
 
