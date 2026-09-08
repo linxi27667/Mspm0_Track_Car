@@ -82,7 +82,12 @@ static bool try_enter_ipd(bsp_esp_at_ctx_t *ctx)
     ctx->ipd_len      = 0;
     ctx->ipd_recv     = 0;
     ctx->state        = BSP_ESP_AT_STATE_IPD_DATA;
-    line_reset(ctx);
+    /* Preserve any AT response that preceded this unsolicited +IPD header.
+     * A CIPSEND prompt/SEND OK and inbound TCP data can share one UART burst;
+     * clearing the whole line here loses the TX response and causes a false
+     * timeout even though the payload was sent successfully. */
+    ctx->line_len = offset;
+    ctx->line_buf[ctx->line_len] = '\0';
     return true;
 }
 
@@ -108,7 +113,8 @@ static bool feed_byte(bsp_esp_at_ctx_t *ctx, uint8_t b)
         if (ctx->ipd_recv >= ctx->ipd_expected) {
             ipd_complete = true;
             ctx->state = BSP_ESP_AT_STATE_LINE;
-            line_reset(ctx);
+            /* Keep the response prefix retained by try_enter_ipd().  The
+             * command owner clears it after consuming > / SEND OK. */
         }
         break;
 
@@ -160,6 +166,60 @@ void Bsp_ESP_AT_Init(bsp_esp_at_ctx_t *ctx, bsp_uart_t *uart,
     if (line_size > 0) line_buf[0] = '\0';
 }
 
+bool Bsp_ESP_AT_BeginCommand(bsp_esp_at_ctx_t *ctx, const char *cmd)
+{
+    if (ctx == NULL || ctx->uart == NULL || cmd == NULL || cmd[0] == '\0') {
+        return false;
+    }
+    if (ctx->uart->tx_busy || Bsp_UART_TxPending(ctx->uart) != 0u) {
+        return false;
+    }
+
+    /* Discard bytes belonging to the previous transaction before the new
+     * command enters DMA, so an old ERROR cannot fail this command. */
+    line_reset(ctx);
+    ctx->state = BSP_ESP_AT_STATE_LINE;
+    {
+        uint8_t b;
+        Bsp_UART_PumpRx(ctx->uart);
+        while (Bsp_UART_ReadByte(ctx->uart, &b)) {}
+    }
+
+    return Bsp_UART_TrySendFrame(ctx->uart, (const uint8_t *)cmd,
+                                 (uint16_t)strlen(cmd));
+}
+
+bsp_esp_at_response_t Bsp_ESP_AT_PollResponse(bsp_esp_at_ctx_t *ctx,
+                                               const char *expect)
+{
+    if (ctx == NULL || ctx->uart == NULL || expect == NULL) {
+        return BSP_ESP_AT_RESPONSE_FAILED;
+    }
+
+    uint16_t budget = BSP_ESP_AT_POLL_BUDGET;
+    while (budget-- > 0u) {
+        uint8_t b;
+        Bsp_UART_PumpRx(ctx->uart);
+        if (!Bsp_UART_ReadByte(ctx->uart, &b)) {
+            break;
+        }
+        (void)feed_byte(ctx, b);
+        if (ctx->state != BSP_ESP_AT_STATE_LINE) {
+            continue;
+        }
+        if (strstr((const char *)ctx->line_buf, expect) != NULL) {
+            return BSP_ESP_AT_RESPONSE_MATCHED;
+        }
+        if (strstr((const char *)ctx->line_buf, "ERROR") != NULL ||
+            strstr((const char *)ctx->line_buf, "FAIL") != NULL ||
+            strstr((const char *)ctx->line_buf, "CLOSED") != NULL) {
+            ctx->at_fail_count++;
+            return BSP_ESP_AT_RESPONSE_FAILED;
+        }
+    }
+    return BSP_ESP_AT_RESPONSE_PENDING;
+}
+
 bool Bsp_ESP_AT_SendCmd(bsp_esp_at_ctx_t *ctx, const char *cmd,
                         const char *expect, uint32_t timeout_ms)
 {
@@ -169,9 +229,11 @@ bool Bsp_ESP_AT_SendCmd(bsp_esp_at_ctx_t *ctx, const char *cmd,
     line_reset(ctx);
     ctx->state = BSP_ESP_AT_STATE_LINE;
 
-    /* 先排空 RX FIFO 里的残留（上一条指令的尾巴） */
+    /* Publish in-flight DMA bytes before discarding the previous command's
+     * tail; otherwise stale ERROR text can race the new command response. */
     {
         uint8_t b;
+        Bsp_UART_PumpRx(ctx->uart);
         while (Bsp_UART_ReadByte(ctx->uart, &b)) {}
     }
 

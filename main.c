@@ -11,125 +11,19 @@
  */
 
 /* ==================================================================
- * ====== 用户调参区 (所有可调参数集中于此,方便手动调试) ======
- * 说明: 此处定义优先于 track.h / app_encoder_motor.h 中的默认值
- *       修改后重新编译烧录即可生效
- *       注意: track.c/app_encoder_motor.c 是独立编译单元, 参数需同步到
- *       APP/Inc/user_tuning.h 才能真正作用于循迹/电机代码。
+ * ====== 用户调参区 ======
+ * 所有可调参数的默认值唯一定义在 APP/Inc/user_tuning.h。
+ * 本文件不再重复定义，修改参数请编辑 user_tuning.h 后重新编译。
  *
- * ====== 国一/省一方案学习总结(2024电赛H题) ======
- * 1. 陀螺仪: 国一方案都用JY61P/HWT101数字陀螺仪(直接输出角度,无零漂)
- *    我们用MPU6050需积分,瞬时加速度大会漂移,需开机静止校准+PID稳定
- * 2. 状态机+航向锁定: 每段路锁定目标航向角,陀螺仪PID走直线
- * 3. 循迹时也保持速度闭环: 灰度只输出差速,速度环保证车速稳定
- * 4. 位置前馈: 编码器累计脉冲数判断到达点(我们用圈数+超时)
- * 5. 速度环只用P就够: 省一方案验证P环足够,KI=0避免积分饱和
- * 6. 差速范围: 省一方案离散差速最大±28,我们OLIMIT=30起步
- * 7. 丢线处理: 锁定航向角直行+编码器测距判断,超时停车
- * ================================================================== */
-
-/* ---------- 1. 循迹线PID (主循迹,输入灰度误差,输出转向量) ----------
- * 调参方法:
- *   1. 先只调KP: 从小值(2.0)开始,车能跟线但反应慢→加大KP
- *   2. 车甩出弯道→KP太大,减小
- *   3. 车左右震荡→加KD(从0.5开始),KD约为KP的1/5~1/3
- *   4. 直线有静差→加KI(从0.1开始),但通常循迹KI=0
- *   5. 转向量过大→减小OLIMIT
- * 参考省一方案: 离散差速最大±28,我们用连续PID,OLIMIT建议30起步
- * 参考wandao方案: KP=5 KI=0 KD=3(注意KD=KP*0.6,偏大抑制震荡)
- * 综合建议: KP=5 KD=1(KD=KP/5) 起步,实测调整 */
-#define USER_LINE_PID_KP           5.0f    /* 比例增益(多方案共识:5.0是稳健起点) */
-#define USER_LINE_PID_KI           0.0f    /* 积分增益(循迹通常为0,国一方案验证) */
-#define USER_LINE_PID_KD           1.0f    /* 微分增益(KP/5,抑制震荡) */
-#define USER_LINE_PID_ILIMIT       50.0f   /* 积分限幅 */
-#define USER_LINE_PID_OLIMIT       30.0f   /* 输出限幅(省一参考:差速最大±28) */
-#define USER_LINE_PID_DERIV_ALPHA  0.6f    /* 不完全微分系数(0~1,越大滤波越弱) */
-/* 国一方案核心: LINE_FOLLOW 陀螺仪角速度阻尼 (直行稳/弯道灵)
- * 公式: turn_output = line_pid - GYRO_DAMP * gyro_z
- * 调参: 直道抖动→加大(0.15→0.3), 弯道跟踪迟钝→减小(0.15→0.08) */
-#define USER_LINE_FOLLOW_GYRO_DAMP 0.15f   /* 陀螺仪阻尼系数(0=禁用,0.15起步) */
-
-/* ---------- 2. 陀螺仪PID (丢线/直角弯时用,输入航向角偏差) ----------
- * 调参方法:
- *   1. 直角弯转不过去→加大KP
- *   2. 转过头→加KD或减小KP
- *   3. 丢线时车跑偏→加大KP
- * 注意: MPU6050有零漂,省一方案用JY61P免校准,我们需开机静止校准 */
-#define USER_GYRO_PID_KP           3.0f    /* 比例增益 */
-#define USER_GYRO_PID_KI           0.0f    /* 积分增益 */
-#define USER_GYRO_PID_KD           0.5f    /* 微分增益 */
-#define USER_GYRO_PID_ILIMIT       30.0f   /* 积分限幅 */
-#define USER_GYRO_PID_OLIMIT       30.0f   /* 输出限幅(与线PID一致) */
-
-/* ---------- 3. 速度PID (电机闭环,输入目标速度,反馈编码器,输出PWM) ----------
- * 调参方法:
- *   1. 空转时PWM很高(如90)是正常的(编码器读数≈0,PID拼命加PWM)
- *   2. 接轮子后车不动→加大KP
- *   3. 车速震荡→加KD或减小KP
- *   4. 速度跟不上→加大OLIMIT或减小INTEGRAL_SEP
- * 速度比例尺(SPEED_SCALE): 国一方案必须左右分别标定!
- *   方法1(自动): 悬空车轮, K3长按触发 App_Motor_Calibrate_Scale(), RTT打印scale值
- *   方法2(手动): 设PWM=50,测encoder_speed, scale = encoder_speed / 50
- *   注意: 左编码器QEI 4x / 右编码器GPIO 2x, scale_right ≈ 2 * scale_left
- * 速度环只用P就够(省一方案验证),KI=0避免积分饱和 */
-#define USER_MOTOR_SPEED_PID_KP    2.0f    /* 速度PID比例增益(省一参考:加大到2.0) */
-#define USER_MOTOR_SPEED_PID_KI    0.0f    /* 速度PID积分增益(省一验证:P环足够) */
-#define USER_MOTOR_SPEED_PID_KD    0.0f    /* 速度PID微分增益 */
-#define USER_MOTOR_SPEED_PID_ILIMIT 30.0f  /* 速度PID积分限幅 */
-#define USER_MOTOR_SPEED_PID_OLIMIT 40.0f  /* 速度PID输出限幅(前馈+修正≤100) */
-#define USER_MOTOR_SPEED_PID_INTEGRAL_SEP 15.0f /* 积分分离阈值(误差>此值不累加I) */
-#define USER_MOTOR_SPEED_SCALE_LEFT   1.0f  /* 左轮速度比例尺(实车标定,左QEI 4x) */
-#define USER_MOTOR_SPEED_SCALE_RIGHT  2.0f  /* 右轮速度比例尺(右GPIO 2x,典型=2*LEFT) */
-
-/* ---------- 4. 循迹策略参数 ----------
- * 调参方法:
- *   1. 车速太快冲出弯道→减小BASE_SPEED或SPEED_STRAIGHT
- *   2. 直道不够快→加大SPEED_STRAIGHT
- *   3. 弯道转不过→减小SPEED_CURVE或加大MOTOR_INNER_MIN
- *   4. 急转时内侧轮停转→减小MOTOR_INNER_MIN(最低15)
- * 省一方案: 单圈15秒,说明速度中等,我们用40起步 */
-#define USER_TRACK_BASE_SPEED      40      /* 基础速度(启动时,省一参考值) */
-#define USER_TRACK_SPEED_STRAIGHT  50      /* 直道速度(降低,先求稳) */
-#define USER_TRACK_SPEED_CURVE     26      /* 弯道/直角速度(先求稳,后续每次+3) */
-#define USER_TRACK_SPEED_RAMP_STEP 2       /* 速度渐变步进(避免突变抖动) */
-#define USER_TRACK_MOTOR_INNER_MIN 15      /* 内侧电机最低速度(防急转停转) */
-#define USER_TRACK_CIRCLES         1       /* 目标圈数 */
-/* 国一方案: 连续曲率变速 (替代二档跳变)
- * |error|=0→SPEED_STRAIGHT, |error|>=此值→SPEED_CURVE, 中间线性插值 */
-#define USER_TRACK_CURVE_ERROR_MAX 2.5f    /* 误差达此值时降到弯道速度 */
-
-/* ---------- 5. 丢线/直角弯参数 ----------
- * 调参方法:
- *   1. 丢线后车立即停车→加大LINE_LOST_TIMEOUT
- *   2. 直角弯检测不到→减小RIGHT_ANGLE_THRESHOLD或GYRO_RATE或ERROR_INTEGRAL
- *   3. 普通弯道被误判为直角弯→加大RIGHT_ANGLE_THRESHOLD或CONFIRM_FRAMES
- * 国一方案: 直角弯多条件触发 (任一满足即检测)
- *   cond_outer: S0/S7黑+大误差 | cond_accum: 误差累积 | cond_rate: 角速度超限 */
-#define USER_LINE_LOST_TIMEOUT     500     /* 丢线超时停车(ms) */
-#define USER_LINE_LOST_GAIN        2.0f    /* 丢线时转向增益(无陀螺仪时用) */
-#define USER_RIGHT_ANGLE_THRESHOLD 2.5f    /* 直角弯检测误差阈值(cond_outer) */
-#define USER_RIGHT_ANGLE_CONFIRM_FRAMES 3  /* 直角弯连续确认帧数 */
-#define USER_RIGHT_ANGLE_TIMEOUT   1000    /* 直角弯超时(ms) */
-#define USER_RIGHT_ANGLE_DONE_ERR  5.0f    /* 直角弯完成角度误差(度) */
-#define USER_RIGHT_ANGLE_ERROR_INTEGRAL  8.0f  /* 误差累积阈值(cond_accum,连续大误差) */
-#define USER_RIGHT_ANGLE_GYRO_RATE       80.0f /* 角速度阈值(cond_rate,deg/s,急弯触发) */
-#define USER_RIGHT_ANGLE_TARGET_ANGLE    88.0f /* 目标转角(略小于90,靠灰度捕线修正) */
-#define USER_RIGHT_ANGLE_MIN_EXIT_ANGLE  55.0f /* 转过此角度后允许灰度捕线提前退出 */
-#define USER_RIGHT_ANGLE_EXIT_CENTER_MIN 2     /* 出弯捕线: S2~S5至少2路黑 */
-#define USER_RIGHT_ANGLE_EXIT_BLACK_MIN  1     /* 出弯捕线: 总黑通道下限 */
-#define USER_RIGHT_ANGLE_EXIT_BLACK_MAX  5     /* 出弯捕线: 避免起点线/大片黑误退出 */
-
-/* ---------- 6. 起点线/十字路口参数 ---------- */
-#define USER_START_LINE_MIN_BLACK  6       /* 起点线最少黑色通道数 */
-#define USER_CROSS_MIN_BLACK       4       /* 十字路口中间黑色通道数 */
-
-/* ==================================================================
- * ====== 用户调参区结束 (以下不要修改) ======
+ * 远程可调参数（线环、速度与电机环）的范围
+ * 同时由 host/param_schema.py 驱动，tests/test_param_schema.py 验证一致性。
+ * 最终比赛档值唯一落在 user_tuning.h，RACE 构建直接编译生效。
  * ================================================================== */
 
 #include "ti_msp_dl_config.h"
 #include <elog.h>
 #include "SEGGER_RTT.h"
+#include "app_log.h"
 #include "bsp_uart.h"
 #include "app_all.h"
 #include "app_esp01s_cfg.h"
@@ -139,12 +33,8 @@
 #include <string.h>
 
 /* ================= 调试开关 ================= */
-/* SELFTEST_MODE=1: 上电后自动跑一次自检（电机/编码器/MPU/灰度） */
+/* SELFTEST_MODE=1: 上电后自动跑一次自检（电机/编码器/MPU/鱼眼） */
 /* SELFTEST_MODE=0: 跳过自检，直接进入循迹模式 */
-#ifndef SELFTEST_MODE
-#define SELFTEST_MODE  0
-#endif
-
 /* ================= 全局时标 ================= */
 extern volatile uint32_t systick_ms;  /* 定义在 bsp_common.c */
 
@@ -195,26 +85,15 @@ static void Enable_GPIO_InputReadback(void)
 {
     const uint32_t INE_BIT = IOMUX_PINCM_INENA_ENABLE;
 
-    /* 灰度 AD0/AD1/AD2 */
-    IOMUX->SECCFG.PINCM[Grayscale_ADDR_A_AD0_IOMUX] |= INE_BIT;
-    IOMUX->SECCFG.PINCM[Grayscale_ADDR_A_AD1_IOMUX] |= INE_BIT;
-    IOMUX->SECCFG.PINCM[Grayscale_ADDR_B_AD2_IOMUX] |= INE_BIT;
-
-    /* 电机方向引脚 */
-    IOMUX->SECCFG.PINCM[Monitor_Dir_Monitor_AIN1_IOMUX] |= INE_BIT;
-    IOMUX->SECCFG.PINCM[Monitor_Dir_Monitor_AIN2_IOMUX] |= INE_BIT;
-    IOMUX->SECCFG.PINCM[Right_Motor_Dir_AIN1_IOMUX] |= INE_BIT;
-    IOMUX->SECCFG.PINCM[Right_Motor_Dir_AIN2_IOMUX] |= INE_BIT;
-
-    /* 右编码器 PHA/PHB (PB12/PB13) — 确保 INE 使能, ISR 中读 DIN 判断方向 */
+    /* 编码器 PHA/PHB — 确保ISR中可原子读取两相信号。 */
+    IOMUX->SECCFG.PINCM[Left_Encoder_LEFT_PHA_IOMUX] |= INE_BIT;
+    IOMUX->SECCFG.PINCM[Left_Encoder_LEFT_PHB_IOMUX] |= INE_BIT;
     IOMUX->SECCFG.PINCM[Right_Encoder_PHA_IOMUX] |= INE_BIT;
     IOMUX->SECCFG.PINCM[Right_Encoder_PHB_IOMUX] |= INE_BIT;
 
-    /* LED 引脚 */
-    IOMUX->SECCFG.PINCM[Led_Group_LED1_IOMUX] |= INE_BIT;
-    IOMUX->SECCFG.PINCM[Led_Group_LED2_IOMUX] |= INE_BIT;
-    IOMUX->SECCFG.PINCM[Led_Group_LED3_IOMUX] |= INE_BIT;
-    IOMUX->SECCFG.PINCM[Led_Group_LED4_IOMUX] |= INE_BIT;
+    /* 板载状态LED与蜂鸣器控制引脚 */
+    IOMUX->SECCFG.PINCM[Board_Output_STATUS_LED_IOMUX] |= INE_BIT;
+    IOMUX->SECCFG.PINCM[Board_Output_BUZZER_IOMUX] |= INE_BIT;
 }
 
 /* ================= 外设中断 ISR ================= */
@@ -273,6 +152,9 @@ void DMA_IRQHandler(void)
         case DL_DMA_EVENT_IIDX_DMACH1:
             Uart_Tx_DMA_Done_IRQHandler();
             break;
+        case DL_DMA_EVENT_IIDX_DMACH2:
+            App_ESP01S_RX_DMA_Done_IRQHandler();
+            break;
         case DL_DMA_EVENT_IIDX_DMACH3:
             App_ESP01S_Tx_DMA_Done_IRQHandler();
             break;
@@ -280,13 +162,15 @@ void DMA_IRQHandler(void)
     }
 }
 
-/* GPIO GROUP1 中断 — 右编码器PHA双沿触发 */
+/* GPIO GROUP1中断 — 左右编码器A/B两相双边沿触发。 */
 void GROUP1_IRQHandler(void)
 {
-    if (DL_GPIO_getEnabledInterruptStatus(RIGHT_ENC_PHA_PORT,
-                                          RIGHT_ENC_PHA_PIN)) {
-        DL_GPIO_clearInterruptStatus(RIGHT_ENC_PHA_PORT, RIGHT_ENC_PHA_PIN);
-        Right_Encoder_IRQHandler();
+    const uint32_t encoder_pins = LEFT_ENC_PHA_PIN | LEFT_ENC_PHB_PIN |
+                                  RIGHT_ENC_PHA_PIN | RIGHT_ENC_PHB_PIN;
+    uint32_t pending = DL_GPIO_getEnabledInterruptStatus(GPIOB, encoder_pins);
+    if (pending != 0u) {
+        DL_GPIO_clearInterruptStatus(GPIOB, pending);
+        Encoder_GPIO_IRQHandler(pending);
     }
 }
 
@@ -297,7 +181,7 @@ void GROUP1_IRQHandler(void)
 /* ESP-01S 建连进度回调（RTT 打印） */
 static void on_esp_progress(uint8_t step, const char *msg)
 {
-    elog_i("esp", "step %d: %s", step, msg);
+    APP_ESP_LOG_I("esp", "step %d: %s", step, msg);
 }
 
 #if APP_UART1_DIAG_CONSOLE_ENABLE
@@ -340,6 +224,23 @@ static void UART1_Diag_PollEcho(void)
 }
 #endif
 
+static void Log_Build_Config(void)
+{
+    elog_i("CONFIG", "ESP01S=%s", APP_ESP01S_ENABLE ? "ON" : "OFF");
+    elog_i("CONFIG", "TUNING=%s", APP_TUNING_MODE ? "ON" : "OFF");
+    elog_i("CONFIG", "ROTATE=%s", APP_TUNING_ROTATE_LINK_TEST_MODE ? "LINK_TEST" : "REAL");
+    elog_i("CONFIG", "SELFTEST=%s", SELFTEST_MODE ? "ON_MOTOR_TEST" : "OFF");
+    elog_i("CONFIG", "LOG_ESP=%s", APP_LOG_ESP01S_ENABLE ? "ON" : "OFF_LINK_ACTIVE");
+    elog_i("CONFIG", "LOG_GRAY_ADC=%s", APP_LOG_GRAY_ADC_ENABLE ? "ON" : "OFF");
+    elog_i("CONFIG", "LOG_GRAY_STATE=%s", APP_LOG_GRAY_STATE_ENABLE ? "ON" : "OFF");
+    elog_i("CONFIG", "LOG_ROTATE=%s", APP_LOG_ROTATE_ENABLE ? "ON" : "OFF");
+    elog_i("CONFIG", "LOG_VEHICLE=%s", APP_LOG_VEHICLE_ENABLE ? "ON" : "OFF");
+    elog_i("CONFIG", "LOG_TRACK=%s", APP_LOG_TRACK_ENABLE ? "ON" : "OFF");
+    elog_i("CONFIG", "LOG_TUNING=%s", APP_LOG_TUNING_ENABLE ? "ON" : "OFF");
+    elog_i("CONFIG", "LOG_IMU=%s", APP_LOG_IMU_ENABLE ? "ON" : "OFF");
+    elog_i("CONFIG", "LOG_DIAG=%s", APP_LOG_DIAGNOSTIC_ENABLE ? "ON" : "OFF");
+}
+
 static void System_Init(void)
 {
     /* 1. RTT 优先（最早的日志通道） */
@@ -359,24 +260,27 @@ static void System_Init(void)
     elog_set_fmt(ELOG_LVL_INFO,   ELOG_FMT_LVL | ELOG_FMT_TAG | ELOG_FMT_TIME);
     elog_set_fmt(ELOG_LVL_DEBUG,  ELOG_FMT_LVL | ELOG_FMT_TAG | ELOG_FMT_TIME | ELOG_FMT_LINE);
     elog_start();
+    Log_Build_Config();
 
     /* 5. 启用 GPIO 输入回读（诊断用） */
     Enable_GPIO_InputReadback();
 
     /* 6. 应用层模块初始化（顺序参考 f407zet6: Motor/Safety/Key/Encoder） */
     App_Led_Init();
+    elog_i("LED", "GPIO configured: channels=%u", (unsigned)BSP_LED_NUM);
+    App_Buzzer_Init();
+    elog_i("BUZZER", "GPIO configured: PB5 active-low, non-blocking pattern");
     App_Key_Init();
+    elog_i("KEY", "GPIO configured: channels=%u", (unsigned)BSP_KEY_NUM);
     App_Uart_Init();
+    elog_i("UART", "Debug UART configured: 115200 8N1");
 
 #if APP_ESP01S_ENABLE
-    /* 7. ESP-01S WiFi 透传初始化（阻塞建连，失败不阻断主流程）
+    /* 7. ESP-01S 非阻塞初始化（仅初始化 HW + 启动 BOOT 状态机）
+     *    WiFi/TCP 建连由主循环 App_ESP01S_Poll() 逐步推进，不阻塞主流程
      *    现场需先改 app_esp01s_cfg.h 的 WiFi SSID/PASS 和服务器 IP/PORT */
-    if (App_ESP01S_Init(on_esp_progress)) {
-        elog_port_esp_enable(true);   /* 启用 elog → ESP 透传，从此 elog 同时输出 RTT+ESP */
-        elog_i("SYS", "ESP-01S ready, AI tuning link up, elog dual-output enabled");
-    } else {
-        elog_w("SYS", "ESP-01S init failed, continue without AI tuning");
-    }
+    (void)App_ESP01S_Init(on_esp_progress);
+    elog_port_esp_enable(true);   /* 启用 elog → ESP 透传（未连线时日志自动丢弃） */
     App_Tuning_Init();   /* 注册 JSON 接收回调 */
 #else
     DL_UART_disableInterrupt(UART_ESP01S_INST,
@@ -396,33 +300,29 @@ static void System_Init(void)
 /* =================================================================
  * 自检模块（SELFTEST_MODE=1 时执行）
  * ================================================================= */
-#if SELFTEST_MODE
+#if SELFTEST_MODE && APP_LOG_DIAGNOSTIC_ENABLE
 
 static void Diag_PINCM(void)
 {
     elog_i("IOMUX", "=== PINCM Dump (expect 0x00040081 with INE) ===");
-    elog_i("IOMUX", "PA26(AD0, PINCM59)=0x%08lX",
-           (unsigned long)IOMUX->SECCFG.PINCM[Grayscale_ADDR_A_AD0_IOMUX]);
-    elog_i("IOMUX", "PA24(AD1, PINCM54)=0x%08lX",
-           (unsigned long)IOMUX->SECCFG.PINCM[Grayscale_ADDR_A_AD1_IOMUX]);
-    elog_i("IOMUX", "PB24(AD2, PINCM52)=0x%08lX",
-           (unsigned long)IOMUX->SECCFG.PINCM[Grayscale_ADDR_B_AD2_IOMUX]);
-    elog_i("IOMUX", "PA22(LDir1, PINCM47)=0x%08lX",
-           (unsigned long)IOMUX->SECCFG.PINCM[Monitor_Dir_Monitor_AIN1_IOMUX]);
-    elog_i("IOMUX", "PA15(LDir2, PINCM37)=0x%08lX",
-           (unsigned long)IOMUX->SECCFG.PINCM[Monitor_Dir_Monitor_AIN2_IOMUX]);
-    elog_i("IOMUX", "PB0(RDir1, PINCM12)=0x%08lX",
-           (unsigned long)IOMUX->SECCFG.PINCM[Right_Motor_Dir_AIN1_IOMUX]);
-    elog_i("IOMUX", "PB11(RDir2, PINCM28)=0x%08lX",
-           (unsigned long)IOMUX->SECCFG.PINCM[Right_Motor_Dir_AIN2_IOMUX]);
-    elog_i("IOMUX", "PB4(LED1, PINCM17)=0x%08lX [ref]",
-           (unsigned long)IOMUX->SECCFG.PINCM[Led_Group_LED1_IOMUX]);
-
-    /* PWM 引脚 PINCM (应为外设功能) */
-    elog_i("IOMUX", "PA17(LPWM, PINCM39)=0x%08lX [expect PF=TIMG7]",
-           (unsigned long)IOMUX->SECCFG.PINCM[IOMUX_PINCM39]);
-    elog_i("IOMUX", "PB10(RPWM, PINCM27)=0x%08lX [expect PF=TIMG6]",
-           (unsigned long)IOMUX->SECCFG.PINCM[IOMUX_PINCM27]);
+    elog_i("IOMUX", "PA0(PATH_SDA)=0x%08lX PA1(PATH_SCL)=0x%08lX",
+           (unsigned long)IOMUX->SECCFG.PINCM[GPIO_PATH_FISH_I2C_IOMUX_SDA],
+           (unsigned long)IOMUX->SECCFG.PINCM[GPIO_PATH_FISH_I2C_IOMUX_SCL]);
+    elog_i("IOMUX", "PA18(OLED_SDA)=0x%08lX PA17(OLED_SCL)=0x%08lX",
+           (unsigned long)IOMUX->SECCFG.PINCM[GPIO_OLED_I2C_IOMUX_SDA],
+           (unsigned long)IOMUX->SECCFG.PINCM[GPIO_OLED_I2C_IOMUX_SCL]);
+    elog_i("IOMUX", "PA22(L_AIN1_PWM, TIMA0_C1)=0x%08lX",
+           (unsigned long)IOMUX->SECCFG.PINCM[GPIO_Motor_Left_Timer_C1_IOMUX]);
+    elog_i("IOMUX", "PA15(L_AIN2_PWM, TIMA0_C2)=0x%08lX",
+           (unsigned long)IOMUX->SECCFG.PINCM[GPIO_Motor_Left_Timer_C2_IOMUX]);
+    elog_i("IOMUX", "PB0(R_BIN1_PWM, TIMA1_C0)=0x%08lX",
+           (unsigned long)IOMUX->SECCFG.PINCM[GPIO_Motor_Right_BIN1_Timer_C0_IOMUX]);
+    elog_i("IOMUX", "PB11(R_BIN2_PWM, TIMG6_C1)=0x%08lX",
+           (unsigned long)IOMUX->SECCFG.PINCM[GPIO_Motor_Right_BIN2_Timer_C1_IOMUX]);
+    elog_i("IOMUX", "PB4(STATUS_LED, PINCM17)=0x%08lX [ref]",
+           (unsigned long)IOMUX->SECCFG.PINCM[Board_Output_STATUS_LED_IOMUX]);
+    elog_i("IOMUX", "PB5(BUZZER, PINCM18)=0x%08lX [ref]",
+           (unsigned long)IOMUX->SECCFG.PINCM[Board_Output_BUZZER_IOMUX]);
 
     /* GPIO 寄存器 */
     elog_i("GPIO", "A: DOE=0x%08lX DOUT=0x%08lX DIN=0x%08lX",
@@ -432,28 +332,24 @@ static void Diag_PINCM(void)
            (unsigned long)GPIOB->DOE31_0, (unsigned long)GPIOB->DOUT31_0,
            (unsigned long)GPIOB->DIN31_0);
 
-    /* PA27 ADC 引脚状态 (PA27 = IOMUX_PINCM60) */
-    elog_i("IOMUX", "PA27(ADC, PINCM60)=0x%08lX [expect 0x00 analog]",
-           (unsigned long)IOMUX->SECCFG.PINCM[IOMUX_PINCM60]);
 }
 
-static void SelfTest_MPU6050(void)
+static void SelfTest_IMU660RB(void)
 {
-    elog_i("TEST", "==== MPU6050 Test ====");
-    App_Mpu_Init();
+    elog_i("TEST", "==== IMU660RB Test ====");
+    (void)App_Imu_Init();
     Bsp_Delay_ms(100);
 
-    if (Mpu_Sensor.gyro_ok) {
-        Mpu_Read_Data();
-        elog_i("TEST", "MPU OK: ax=%.2f ay=%.2f az=%.2f",
-               Mpu_Sensor.accel_x, Mpu_Sensor.accel_y, Mpu_Sensor.accel_z);
-        elog_i("TEST", "MPU OK: gx=%.2f gy=%.2f gz=%.2f",
-               Mpu_Sensor.gyro_x, Mpu_Sensor.gyro_y, Mpu_Sensor.gyro_z);
-        elog_i("TEST", "MPU OK: temp=%.1fC", Mpu_Sensor.temp);
+    if (Imu_Sensor.initialized && Imu_Read_Data()) {
+        elog_i("TEST", "ICM OK: ax=%.2f ay=%.2f az=%.2f",
+               Imu_Sensor.accel_x, Imu_Sensor.accel_y, Imu_Sensor.accel_z);
+        elog_i("TEST", "ICM OK: gx=%.2f gy=%.2f gz=%.2f",
+               Imu_Sensor.gyro_x, Imu_Sensor.gyro_y, Imu_Sensor.gyro_z);
+        elog_i("TEST", "IMU660RB OK: temp=%.1fC", Imu_Sensor.temp);
     } else {
-        elog_e("TEST", "MPU FAIL: gyro_ok=0");
+        elog_e("TEST", "ICM FAIL: init/read error");
     }
-    elog_i("TEST", "==== MPU6050 Done ====");
+    elog_i("TEST", "==== IMU660RB Done ====");
 }
 
 static void SelfTest_Motor_Encoder(void)
@@ -463,28 +359,29 @@ static void SelfTest_Motor_Encoder(void)
     Bsp_Delay_ms(50);
 
     /* 引脚说明 */
-    elog_i("MOT", "Left:  PWM=TIMG7_CH0(PA17) DIR1=PA22 DIR2=PA15 Enc=TIMG8(PB21/PB22)");
-    elog_i("MOT", "Right: PWM=TIMG6_CH0(PB10) DIR1=PB0  DIR2=PB11 Enc=GPIO(PB12/PB13)");
+    elog_i("MOT", "Left AT8236: AIN1=TIMA0_C1(PA22) AIN2=TIMA0_C2(PA15) Enc=GPIO4x(PB21/PB22)");
+    elog_i("MOT", "Right AT8236: BIN1=TIMA1_C0(PB0) BIN2=TIMG6_C1(PB11) Enc=GPIO4x(PB12/PB13)");
 
     /* PWM 定时器运行状态 + 寄存器诊断 */
-    uint32_t t7_1 = DL_Timer_getTimerCount(TIMG7);
-    uint32_t t6_1 = DL_Timer_getTimerCount(TIMG6);
+    uint32_t left_1 = DL_Timer_getTimerCount(MOTOR_LEFT_AIN1_PWM_TIMER);
+    uint32_t right_in1_1 = DL_Timer_getTimerCount(MOTOR_RIGHT_BIN1_PWM_TIMER);
+    uint32_t right_in2_1 = DL_Timer_getTimerCount(MOTOR_RIGHT_BIN2_PWM_TIMER);
     Bsp_Delay_ms(10);
-    uint32_t t7_2 = DL_Timer_getTimerCount(TIMG7);
-    uint32_t t6_2 = DL_Timer_getTimerCount(TIMG6);
-    elog_i("MOT", "TIMG7 cnt: %lu->%lu (%s) LOAD=%lu",
-           (unsigned long)t7_1, (unsigned long)t7_2,
-           (t7_2 != t7_1) ? "RUNNING" : "STOPPED",
-           (unsigned long)DL_Timer_getLoadValue(TIMG7));
+    uint32_t left_2 = DL_Timer_getTimerCount(MOTOR_LEFT_AIN1_PWM_TIMER);
+    uint32_t right_in1_2 = DL_Timer_getTimerCount(MOTOR_RIGHT_BIN1_PWM_TIMER);
+    uint32_t right_in2_2 = DL_Timer_getTimerCount(MOTOR_RIGHT_BIN2_PWM_TIMER);
+    elog_i("MOT", "TIMA0 cnt: %lu->%lu (%s) LOAD=%lu",
+           (unsigned long)left_1, (unsigned long)left_2,
+           (left_2 != left_1) ? "RUNNING" : "STOPPED",
+           (unsigned long)DL_Timer_getLoadValue(MOTOR_LEFT_AIN1_PWM_TIMER));
+    elog_i("MOT", "TIMA1 cnt: %lu->%lu (%s) LOAD=%lu",
+           (unsigned long)right_in1_1, (unsigned long)right_in1_2,
+           (right_in1_2 != right_in1_1) ? "RUNNING" : "STOPPED",
+           (unsigned long)DL_Timer_getLoadValue(MOTOR_RIGHT_BIN1_PWM_TIMER));
     elog_i("MOT", "TIMG6 cnt: %lu->%lu (%s) LOAD=%lu",
-           (unsigned long)t6_1, (unsigned long)t6_2,
-           (t6_2 != t6_1) ? "RUNNING" : "STOPPED",
-           (unsigned long)DL_Timer_getLoadValue(TIMG6));
-
-    /* 编码器定时器诊断 */
-    elog_i("MOT", "TIMG8(Enc) LOAD=%lu cnt=%lu",
-           (unsigned long)DL_Timer_getLoadValue(MOTOR_LEFT_ENC_TIMER),
-           (unsigned long)DL_Timer_getTimerCount(MOTOR_LEFT_ENC_TIMER));
+           (unsigned long)right_in2_1, (unsigned long)right_in2_2,
+           (right_in2_2 != right_in2_1) ? "RUNNING" : "STOPPED",
+           (unsigned long)DL_Timer_getLoadValue(MOTOR_RIGHT_BIN2_PWM_TIMER));
 
     /* 同步编码器基准 (调用 Update_Status 让 last_count = 当前值, 首次返回0) */
     Bsp_Motor_Update_Status(&Motor_Left);
@@ -493,21 +390,22 @@ static void SelfTest_Motor_Encoder(void)
     Motor_Right.encoder_speed = 0;
 
     /* ---- 正转测试: PWM=50, 每200ms采样一次, 共2秒 ----
-     * 使用 Bsp_Motor_Update_Status 获取正确符号的 delta:
-     *   左编码器(QEI 16位): int16_t cast 处理短间隔回绕
-     *   右编码器(GPIO 32位): int32_t 无回绕 */
+     * 左右编码器均读取GPIO 4x累计计数的差值。 */
     elog_i("TEST", "Forward PWM=50 for 2s (sampled every 200ms)...");
     Bsp_Motor_Set_Speed(&Motor_Left, 50);
     Bsp_Motor_Set_Speed(&Motor_Right, 50);
 
-    uint32_t cc7 = DL_TimerG_getCaptureCompareValue(TIMG7, DL_TIMER_CC_0_INDEX);
-    uint32_t cc6 = DL_TimerG_getCaptureCompareValue(TIMG6, DL_TIMER_CC_0_INDEX);
-    uint8_t ld1 = (GPIOA->DOUT31_0 & MOTOR_LEFT_DIR1_PIN)  ? 1 : 0;
-    uint8_t ld2 = (GPIOA->DOUT31_0 & MOTOR_LEFT_DIR2_PIN)  ? 1 : 0;
-    uint8_t rd1 = (GPIOB->DOUT31_0 & MOTOR_RIGHT_DIR1_PIN) ? 1 : 0;
-    uint8_t rd2 = (GPIOB->DOUT31_0 & MOTOR_RIGHT_DIR2_PIN) ? 1 : 0;
-    elog_i("MOT", "Fwd: CC7=%lu CC6=%lu (LOAD=99)", (unsigned long)cc7, (unsigned long)cc6);
-    elog_i("MOT", "Fwd: LDir DOUT=[%d,%d] RDir DOUT=[%d,%d]", ld1, ld2, rd1, rd2);
+    uint32_t left_in1_cc = DL_Timer_getCaptureCompareValue(
+        MOTOR_LEFT_AIN1_PWM_TIMER, MOTOR_LEFT_AIN1_PWM_CHANNEL);
+    uint32_t left_in2_cc = DL_Timer_getCaptureCompareValue(
+        MOTOR_LEFT_AIN2_PWM_TIMER, MOTOR_LEFT_AIN2_PWM_CHANNEL);
+    uint32_t right_in1_cc = DL_Timer_getCaptureCompareValue(
+        MOTOR_RIGHT_BIN1_PWM_TIMER, MOTOR_RIGHT_BIN1_PWM_CHANNEL);
+    uint32_t right_in2_cc = DL_Timer_getCaptureCompareValue(
+        MOTOR_RIGHT_BIN2_PWM_TIMER, MOTOR_RIGHT_BIN2_PWM_CHANNEL);
+    elog_i("MOT", "Fwd CC: L=[%lu,%lu] R=[%lu,%lu] (expect [50,100])",
+           (unsigned long)left_in1_cc, (unsigned long)left_in2_cc,
+           (unsigned long)right_in1_cc, (unsigned long)right_in2_cc);
 
     int32_t left_fwd = 0, right_fwd = 0;
     for (int i = 0; i < 10; i++) {
@@ -528,7 +426,7 @@ static void SelfTest_Motor_Encoder(void)
     } else if (left_fwd > 10 || right_fwd > 10) {
         elog_w("TEST", "Partial: L=%ld R=%ld (check wiring)", (long)left_fwd, (long)right_fwd);
     } else {
-        elog_e("TEST", "Both FAIL - check: 1)Motor driver EN/STBY pin 2)Motor power supply 3)Wiring");
+        elog_e("TEST", "Both FAIL - check: 1)AT8236 VM/GND 2)Motor power supply 3)Wiring");
     }
 
     /* ---- 反转测试: PWM=-50, 每200ms采样一次, 共2秒 ---- */
@@ -536,11 +434,17 @@ static void SelfTest_Motor_Encoder(void)
     Bsp_Motor_Set_Speed(&Motor_Left, -50);
     Bsp_Motor_Set_Speed(&Motor_Right, -50);
 
-    uint8_t ld1r = (GPIOA->DOUT31_0 & MOTOR_LEFT_DIR1_PIN)  ? 1 : 0;
-    uint8_t ld2r = (GPIOA->DOUT31_0 & MOTOR_LEFT_DIR2_PIN)  ? 1 : 0;
-    uint8_t rd1r = (GPIOB->DOUT31_0 & MOTOR_RIGHT_DIR1_PIN) ? 1 : 0;
-    uint8_t rd2r = (GPIOB->DOUT31_0 & MOTOR_RIGHT_DIR2_PIN) ? 1 : 0;
-    elog_i("MOT", "Bwd: LDir DOUT=[%d,%d] RDir DOUT=[%d,%d]", ld1r, ld2r, rd1r, rd2r);
+    left_in1_cc = DL_Timer_getCaptureCompareValue(
+        MOTOR_LEFT_AIN1_PWM_TIMER, MOTOR_LEFT_AIN1_PWM_CHANNEL);
+    left_in2_cc = DL_Timer_getCaptureCompareValue(
+        MOTOR_LEFT_AIN2_PWM_TIMER, MOTOR_LEFT_AIN2_PWM_CHANNEL);
+    right_in1_cc = DL_Timer_getCaptureCompareValue(
+        MOTOR_RIGHT_BIN1_PWM_TIMER, MOTOR_RIGHT_BIN1_PWM_CHANNEL);
+    right_in2_cc = DL_Timer_getCaptureCompareValue(
+        MOTOR_RIGHT_BIN2_PWM_TIMER, MOTOR_RIGHT_BIN2_PWM_CHANNEL);
+    elog_i("MOT", "Bwd CC: L=[%lu,%lu] R=[%lu,%lu] (expect [100,50])",
+           (unsigned long)left_in1_cc, (unsigned long)left_in2_cc,
+           (unsigned long)right_in1_cc, (unsigned long)right_in2_cc);
 
     int32_t left_bwd = 0, right_bwd = 0;
     for (int i = 0; i < 10; i++) {
@@ -569,51 +473,29 @@ static void SelfTest_Motor_Encoder(void)
     elog_i("TEST", "==== Motor+Encoder Done ====");
 }
 
-static void SelfTest_Grayscale(void)
+static void SelfTest_PathFish(void)
 {
-    elog_i("TEST", "==== Grayscale Test ====");
-    elog_i("GRAY", "AD0=PA26 AD1=PA24 AD2=PB24 ADC=PA27(CH0)");
+    uint32_t started_at;
 
-    App_Grayscale_Init();
-    Bsp_Delay_ms(50);
-
-    /* 逐通道测试: 切换 AD0/AD1/AD2, 读取 ADC */
-    for (uint8_t ch = 0; ch < 8; ch++) {
-        uint8_t ad0 = ch & 0x01;
-        uint8_t ad1 = (ch >> 1) & 0x01;
-        uint8_t ad2 = (ch >> 2) & 0x01;
-        GPIO_WritePin(GRAY_AD0_PORT, GRAY_AD0_PIN, ad0);
-        GPIO_WritePin(GRAY_AD1_PORT, GRAY_AD1_PIN, ad1);
-        GPIO_WritePin(GRAY_AD2_PORT, GRAY_AD2_PIN, ad2);
-        Bsp_Delay_ms(10);
-        Grayscale_Sensor.ADC_Read();  /* 丢弃第一次（建立时间） */
-        Bsp_Delay_ms(5);
-        uint16_t v = Grayscale_Sensor.ADC_Read();
-        uint8_t rd0 = (GPIOA->DOUT31_0 & GRAY_AD0_PIN) ? 1 : 0;
-        uint8_t rd1 = (GPIOA->DOUT31_0 & GRAY_AD1_PIN) ? 1 : 0;
-        uint8_t rd2 = (GPIOB->DOUT31_0 & GRAY_AD2_PIN) ? 1 : 0;
-        elog_i("GRAY", "CH%d AD=[%d%d%d] DOUT=[%d%d%d] adc=%u",
-               ch, ad2, ad1, ad0, rd2, rd1, rd0, v);
+    elog_i("TEST", "==== Path Fish I2C0 Test ====");
+    App_PathFish_Init();
+    started_at = Bsp_GetTick();
+    while ((uint32_t)(Bsp_GetTick() - started_at) < 100u) {
+        Path_Fish_Poll(Bsp_GetTick());
     }
-
-    /* BSP 框架扫描一轮 */
-    for (uint8_t i = 0; i < 8; i++) {
-        Grayscale_Update();
-        Bsp_Delay_ms(10);
-    }
-    elog_i("TEST", "Gray BC=%d analog=[%u,%u,%u,%u,%u,%u,%u,%u]",
-           Grayscale_Sensor.black_count,
-           Grayscale_Sensor.analog[0], Grayscale_Sensor.analog[1],
-           Grayscale_Sensor.analog[2], Grayscale_Sensor.analog[3],
-           Grayscale_Sensor.analog[4], Grayscale_Sensor.analog[5],
-           Grayscale_Sensor.analog[6], Grayscale_Sensor.analog[7]);
-    elog_i("TEST", "==== Grayscale Done ====");
+    elog_i("TEST", "Fish seq=%lu mask=0x%03X BC=%u age=%lu err=%lu P=%u",
+           (unsigned long)Path_Fish_Sensor.frame_seq,
+           Path_Fish_Sensor.mask, Path_Fish_Sensor.black_count,
+           (unsigned long)Path_Fish_FrameAge(Bsp_GetTick()),
+           (unsigned long)Path_Fish_Sensor.error_count,
+           Path_Fish_Sensor.black_is_one ? 1u : 0u);
+    elog_i("TEST", "==== Path Fish Done ====");
 }
 
 static void SelfTest_KeyLed(void)
 {
     elog_i("TEST", "==== Key+LED Test ====");
-    for (uint8_t i = 0; i < 4; i++) {
+    for (uint8_t i = 0; i < BSP_LED_NUM; i++) {
         Led_On(i);
         Bsp_Delay_ms(200);
         Led_Off(i);
@@ -629,10 +511,10 @@ static void Run_SelfTest(void)
     Diag_PINCM();
     Bsp_Delay_ms(100);
 
-    SelfTest_MPU6050();
+    SelfTest_IMU660RB();
     Bsp_Delay_ms(200);
 
-    SelfTest_Grayscale();
+    SelfTest_PathFish();
     Bsp_Delay_ms(200);
 
     SelfTest_KeyLed();
@@ -644,148 +526,503 @@ static void Run_SelfTest(void)
     elog_i("SYS", "########## SelfTest Complete ##########");
 }
 
-#endif /* SELFTEST_MODE */
+#endif /* SELFTEST_MODE && APP_LOG_DIAGNOSTIC_ENABLE */
 
 /* =================================================================
  * 主函数
  * ================================================================= */
-int main(void)
+typedef struct {
+    uint32_t last_5ms;
+    uint32_t last_10ms;
+    uint32_t last_100ms;
+    uint32_t last_500ms;
+    uint32_t last_1000ms;
+    uint8_t last_state;
+    uint8_t last_circle;
+    uint8_t last_black_count;
+    uint8_t feedback_circle;
+    bool feedback_tracking;
+} main_runtime_t;
+
+static bool s_oled_failure_logged;
+
+static bool Main_PeriodElapsed(uint32_t now, uint32_t *last, uint32_t period_ms)
 {
-    System_Init();
+    if ((uint32_t)(now - *last) < period_ms) return false;
+    *last = now;
+    return true;
+}
 
-#if SELFTEST_MODE
-    Run_SelfTest();
-    elog_i("SYS", "Switching to tracking mode...");
-    Bsp_Delay_ms(500);
-#endif
+static bool Main_StationaryReady(void)
+{
+    safety_state_t state = Safety_GetState();
+    return state == SAFETY_STATE_READY &&
+           (Track.state == TRACK_STATE_IDLE ||
+            Track.state == TRACK_STATE_FINISHED);
+}
 
-    /* ====== 循迹模式 ====== */
+static void Main_InitializeTracking(void)
+{
+    Safety_Init();
     Track_Init();
+    elog_i("MOTOR", "PWM and encoders configured: dual outputs disabled");
     Track_Set_Circles(USER_TRACK_CIRCLES);
-    Track_Set_Speed(40);
+    Track_Set_Speed(USER_TRACK_BASE_SPEED);
 
-    elog_i("SYS", "Ready. K1=Start K2=Stop K3=WhiteCal(K3Long=ScaleCal) K4=BlackCal");
+    elog_i("SYS", "Waiting for 2 complete Path Fish frames before READY");
+    elog_i("SYS", "K1=Start K2=Stop K3=Refresh(K3Long=ScaleCal) K4=Polarity");
+}
 
-    uint32_t last_5ms = 0, last_10ms = 0, last_100ms = 0, last_500ms = 0, last_1000ms = 0;
-    uint8_t  last_state = 0xFF, last_circle = 0xFF, last_bc = 0xFF;
+static void Main_UpdatePathFish(uint32_t now)
+{
+    static uint32_t last_notified_seq;
 
-    while (1)
-    {
-        uint32_t now = systick_ms;
+    Path_Fish_Poll(now);
+    if (Path_Fish_Sensor.frame_fault && !Safety_AllowsMotorOutput()) {
+        (void)Path_Fish_TakeFault();
+        Safety_ResetPathFishReadiness();
+    }
 
+    if (Path_Fish_Sensor.frame_seq != last_notified_seq) {
+        last_notified_seq = Path_Fish_Sensor.frame_seq;
+        Safety_NotifyPathFishFrame(Path_Fish_Sensor.last_frame_tick,
+                                   true);
+    }
+}
+
+static void Main_RunControl(uint32_t now, main_runtime_t *runtime)
+{
+    if (!Main_PeriodElapsed(now, &runtime->last_5ms, 5u)) return;
+
+    /* IMU恢复仅在Safety已禁止运动时执行；成功后自动重新静止校准。 */
+    App_Imu_Recovery_Update(now, Safety_AllowsMotorOutput());
+
+    /* 静止校准独立于电机授权，每个 5 ms 节拍只采一个样本。校准完成后，
+     * 仅在电机明确禁用时持续采样并慢速跟踪零偏/温漂；运动期间冻结零偏。 */
+    if (Imu_Sensor.calibration_state == IMU_CAL_RUNNING) {
+        (void)Imu_Calibration_Update();
+    } else if (Imu_Sensor.calibration_state == IMU_CAL_DONE &&
+               !Safety_AllowsMotorOutput() &&
+               !Imu_Update_Stationary(0.005f)) {
+        App_Imu_Request_Recovery();
+    }
+
+    if (Safety_ControlTick()) {
         Track_Update();
-
-        if ((now - last_5ms) >= 5) {
-            last_5ms = now;
-            App_Motor_Speed_PID_Update();
+    } else if (Safety_GetState() == SAFETY_STATE_FAULT) {
+        const char *reason = Safety_FaultName(Safety_GetFault());
+        if (Track_Is_Motor_Test()) {
+            Track_Abort_Motor_Test(reason);
+        } else if (Track_Is_Rotating()) {
+            Track_Abort_Rotation(reason);
+        } else if (Track_Is_Heading_Hold()) {
+            (void)Track_Stop_Heading_Hold();
+        } else {
+            Safety_ForceMotorStop();
+            Track.state = TRACK_STATE_FINISHED;
+            Track.left_speed = 0;
+            Track.right_speed = 0;
+            Track.target_speed = 0;
+            Track.turn_output = 0.0f;
         }
+    }
 
-        if ((now - last_10ms) >= 10) {
-            last_10ms = now;
-            Key_Scan_Task();
+    /* Keep encoder telemetry fresh after the safety layer cuts motor output.
+     * With wheel PI disabled this only samples the counters and cannot drive. */
+    App_Motor_Speed_PID_Update();
+}
+
+static void Main_LogVehicleStatus(main_runtime_t *runtime)
+{
+    uint8_t state = (uint8_t)Track.state;
+    uint8_t circle = (uint8_t)Track.current_circle;
+    uint8_t black_count = Path_Fish_Sensor.black_count;
+    if (!Track_State_Allows_Motor(Track.state)) return;
+
+    APP_VEHICLE_LOG_I("CAR", "S=%d C=%d E=%ld G=%ld LT=%d RT=%d LP=%ld RP=%ld LE=%ld RE=%ld LX=%ld RX=%ld BC=%d",
+                      Track.state, Track.current_circle,
+                      (long)(Track.error * 1000), (long)Track.gyro_rate,
+                      Track.left_speed, Track.right_speed,
+                      (long)Motor_Left.current_pwm, (long)Motor_Right.current_pwm,
+                      (long)Motor_Left.encoder_speed, (long)Motor_Right.encoder_speed,
+                      (long)Motor_Left.total_position, (long)Motor_Right.total_position,
+                      black_count);
+    if (Track.state == TRACK_STATE_ROTATE) {
+        APP_VEHICLE_LOG_I("ROTCTL", "actual=%ld error=%ld rate=%ld output=%ld",
+                          (long)(Track.rotate_actual_deg * 10.0f),
+                          (long)(Track.rotate_error_deg * 10.0f),
+                          (long)(Imu_Sensor.gyro_z * 10.0f),
+                          (long)(Track.turn_output * 10.0f));
+    } else if (Track.state == TRACK_STATE_HEADING_HOLD) {
+        APP_VEHICLE_LOG_I("HOLDCTL", "target=%ld actual=%ld error=%ld rate=%ld output=%ld",
+                          (long)(Track.heading_hold_target * 10.0f),
+                          (long)(Track.heading_hold_actual * 10.0f),
+                          (long)(Track.heading_hold_error * 10.0f),
+                          (long)(Imu_Sensor.gyro_z * 10.0f),
+                          (long)(Track.turn_output * 10.0f));
+    }
+
+    runtime->last_state = state;
+    runtime->last_circle = circle;
+    runtime->last_black_count = black_count;
+}
+
+static void Main_LogFishProbe(void)
+{
+#if APP_LOG_DIAGNOSTIC_ENABLE
+    static bool probe_logged;
+    static bool packet_logged;
+    static bool cal_guide_logged;
+    static bool white_cal_logged;
+    static bool black_cal_logged;
+    static uint32_t last_state_key;
+    path_fish_transport_diag_t diag;
+    uint32_t state_key;
+
+    Path_Fish_GetTransportDiag(&diag);
+    state_key = (uint32_t)diag.status;
+    if (diag.status != PATH_FISH_TRANSPORT_OK) {
+        state_key = (state_key << 8) |
+                    (diag.current_bus_monitor &
+                     (PATH_FISH_BUS_SCL_HIGH_MASK |
+                      PATH_FISH_BUS_SDA_HIGH_MASK));
+    }
+
+    if (!probe_logged || state_key != last_state_key) {
+        probe_logged = true;
+        last_state_key = state_key;
+        APP_DIAG_LOG_I(
+            "FISH_PROBE",
+            "addr=0x%02X hz=%lu state=%s SCL=%u SDA=%u MSR=0x%02lX MBMON=0x%lX rx=%lu packets=%lu seq=%lu sync=%lu flt=%lu,%lu,%lu stuck=%lu rec=%lu/%lu",
+            PATH_FISH_I2C_ADDRESS,
+            (unsigned long)PATH_FISH_I2C_BUS_SPEED_HZ,
+            Path_Fish_TransportStatusText(),
+            (diag.current_bus_monitor & PATH_FISH_BUS_SCL_HIGH_MASK) != 0u,
+            (diag.current_bus_monitor & PATH_FISH_BUS_SDA_HIGH_MASK) != 0u,
+            (unsigned long)diag.current_controller_status,
+            (unsigned long)diag.current_bus_monitor,
+            (unsigned long)diag.transaction_count,
+            (unsigned long)diag.packet_count,
+            (unsigned long)Path_Fish_Sensor.frame_seq,
+            (unsigned long)diag.stream_resync_count,
+            (unsigned long)diag.timeout_count,
+            (unsigned long)diag.nack_count,
+            (unsigned long)diag.arbitration_lost_count,
+            (unsigned long)diag.bus_stuck_count,
+            (unsigned long)diag.recovery_success_count,
+            (unsigned long)diag.recovery_attempt_count);
+    }
+
+    if (!packet_logged && diag.packet_count != 0u) {
+        packet_logged = true;
+        APP_DIAG_LOG_I(
+            "FISH_RX",
+            "first=%02X %02X %02X %02X %02X %02X %02X",
+            diag.first_packet[0], diag.first_packet[1],
+            diag.first_packet[2], diag.first_packet[3],
+            diag.first_packet[4], diag.first_packet[5],
+            diag.first_packet[6]);
+    }
+
+    if (!cal_guide_logged) {
+        cal_guide_logged = true;
+        APP_DIAG_LOG_I(
+            "FISH_CAL",
+            "hold K1 1s; white short K1; black short K2; expect white=000000000000 black=111111111111");
+    }
+    if (!white_cal_logged &&
+        Bsp_PathFish_WhiteSurfaceStable(&Path_Fish_Sensor)) {
+        white_cal_logged = true;
+        APP_DIAG_LOG_I("FISH_CAL", "white=PASS mask=0x%03X BC=%u",
+                       Path_Fish_Sensor.mask,
+                       Path_Fish_Sensor.black_count);
+    }
+    if (!black_cal_logged &&
+        Bsp_PathFish_BlackSurfaceStable(&Path_Fish_Sensor)) {
+        black_cal_logged = true;
+        APP_DIAG_LOG_I("FISH_CAL", "black=PASS mask=0x%03X BC=%u",
+                       Path_Fish_Sensor.mask,
+                       Path_Fish_Sensor.black_count);
+    }
+#endif
+}
+
+static void Main_LogPathFish(void)
+{
+    Main_LogFishProbe();
+#if APP_PATH_FISH_I2C_DIAG_ENABLE
+    static uint32_t last_diag_error_count;
+    path_fish_transport_diag_t diag;
+
+    Path_Fish_GetTransportDiag(&diag);
+    if (Path_Fish_Sensor.error_count != last_diag_error_count) {
+        last_diag_error_count = Path_Fish_Sensor.error_count;
+        APP_GRAY_STATE_LOG_I("FISH", "i2c err=%lu timeout=%lu nack=%lu arb=%lu short=%lu overflow=%lu stuck=%lu recover=%lu/%lu status=0x%lX bus=%lu",
+            (unsigned long)Path_Fish_Sensor.error_count,
+            (unsigned long)diag.timeout_count,
+            (unsigned long)diag.nack_count,
+            (unsigned long)diag.arbitration_lost_count,
+            (unsigned long)diag.short_read_count,
+            (unsigned long)diag.overflow_count,
+            (unsigned long)diag.bus_stuck_count,
+            (unsigned long)diag.recovery_success_count,
+            (unsigned long)diag.recovery_attempt_count,
+            (unsigned long)diag.last_controller_status,
+            (unsigned long)diag.last_bus_monitor);
+    }
+#endif
+    if (!Track_State_Is_LineTracking(Track.state)) return;
+
+    APP_GRAY_ADC_LOG_I("FISH",
+        "A=%u%u%u%u%u%u%u%u%u%u%u%u mask=0x%03X BC=%u",
+        Path_Fish_Sensor.digital[0], Path_Fish_Sensor.digital[1],
+        Path_Fish_Sensor.digital[2], Path_Fish_Sensor.digital[3],
+        Path_Fish_Sensor.digital[4], Path_Fish_Sensor.digital[5],
+        Path_Fish_Sensor.digital[6], Path_Fish_Sensor.digital[7],
+        Path_Fish_Sensor.digital[8], Path_Fish_Sensor.digital[9],
+        Path_Fish_Sensor.digital[10], Path_Fish_Sensor.digital[11],
+        Path_Fish_Sensor.mask, Path_Fish_Sensor.black_count);
+    APP_GRAY_STATE_LOG_I("FISH", "seq=%lu age=%lu err=%lu polarity=%u",
+        (unsigned long)Path_Fish_Sensor.frame_seq,
+        (unsigned long)Path_Fish_FrameAge(Bsp_GetTick()),
+        (unsigned long)Path_Fish_Sensor.error_count,
+        Path_Fish_Sensor.black_is_one ? 1u : 0u);
+}
+
+static const char *Main_SensorIssue(uint32_t now)
+{
+    safety_fault_t fault = Safety_GetFault();
+
+    if (fault == SAFETY_FAULT_PATH_FISH_EXPIRED) return "FISH:TIMEOUT";
+    if (fault == SAFETY_FAULT_PATH_FISH_NOT_READY) return "FISH:NOT READY";
+    if (fault == SAFETY_FAULT_LINE_LOST_TIMEOUT) return "LINE:LOST";
+    if (fault == SAFETY_FAULT_SENSOR_ABNORMAL) {
+        if (!Imu_Sensor.initialized || !Imu_Sensor.data_valid ||
+            Imu_Sensor.calibration_state == IMU_CAL_FAILED) {
+            return "IMU:ERROR";
         }
+        return "FISH:BUS ERROR";
+    }
+    if (now >= 1000u && !Imu_Sensor.initialized) return "IMU:OFFLINE";
+    if (Imu_Sensor.calibration_state == IMU_CAL_FAILED) return "IMU:CAL FAIL";
+    if (now >= 1000u && Path_Fish_Sensor.frame_seq == 0u) return "FISH:NO DATA";
+    if (Path_Fish_Sensor.frame_seq != 0u && !Path_Fish_IsFresh(now)) {
+        return "FISH:STALE";
+    }
+    return NULL;
+}
 
-        if ((now - last_500ms) >= 500) {
-            last_500ms = now;
-            uint8_t cur_state  = (uint8_t)Track.state;
-            uint8_t cur_circle = (uint8_t)Track.current_circle;
-            uint8_t cur_bc     = Grayscale_Sensor.black_count;
+static void Main_UpdateOled(uint32_t now)
+{
+    char line[17];
+    bool tracking = Track_State_Is_LineTracking(Track.state);
+    bool corner = Track.state == TRACK_STATE_RIGHT_ANGLE;
+    const char *sensor_issue = Main_SensorIssue(now);
 
-            bool changed = (cur_state != last_state) ||
-                           (cur_circle != last_circle) ||
-                           (cur_bc != last_bc);
+    if (sensor_issue != NULL) {
+        App_Oled_SetLine(1u, "SENSOR:ERROR");
+        App_Oled_SetLine(2u, sensor_issue);
+    } else {
+        (void)snprintf(line, sizeof(line), "TRACK:%s", tracking ? "ON" : "OFF");
+        App_Oled_SetLine(1u, line);
+        (void)snprintf(line, sizeof(line), "CORNER:%s", corner ? "YES" : "NO");
+        App_Oled_SetLine(2u, line);
+    }
+    (void)snprintf(line, sizeof(line), "LAPS:%u", Track.current_circle);
+    App_Oled_SetLine(3u, line);
+    line[0] = 'A';
+    line[1] = ':';
+    for (uint8_t i = 0u; i < BSP_PATH_FISH_CHANNEL_COUNT; i++) {
+        line[i + 2u] = Path_Fish_Sensor.digital[i] ? '1' : '0';
+    }
+    line[14] = '\0';
+    App_Oled_SetLine(4u, line);
+}
 
-            if (changed ||
-                (cur_state != TRACK_STATE_IDLE &&
-                 cur_state != TRACK_STATE_FINISHED)) {
-                /* 诊断: 打印完整电机状态
-                 * State/Circle/Error/LeftTarget/RightTarget/BlackCount
-                 * LeftPwm/RightPwm/LeftEncoder/RightEncoder
-                 * LeftDir1/LeftDir2/RightDir1/RightDir2 (方向引脚DOUT状态)
-                 * LeftTotalPos/RightTotalPos (累计位置) */
-                uint8_t ld1 = (GPIOA->DOUT31_0 & MOTOR_LEFT_DIR1_PIN)  ? 1 : 0;
-                uint8_t ld2 = (GPIOA->DOUT31_0 & MOTOR_LEFT_DIR2_PIN)  ? 1 : 0;
-                uint8_t rd1 = (GPIOB->DOUT31_0 & MOTOR_RIGHT_DIR1_PIN) ? 1 : 0;
-                uint8_t rd2 = (GPIOB->DOUT31_0 & MOTOR_RIGHT_DIR2_PIN) ? 1 : 0;
-                elog_i("CAR", "State:%d Circle:%d Error:%ld GyroRate:%ld LeftTarget:%d RightTarget:%d BlackCount:%d",
-                       Track.state, Track.current_circle,
-                       (long)(Track.error * 1000),
-                       (long)Track.gyro_rate,
-                       Track.left_speed, Track.right_speed, cur_bc);
-                elog_i("MOTOR", "LeftPwm:%ld RightPwm:%ld | LeftEnc:%ld RightEnc:%ld | LeftTotal:%ld RightTotal:%ld",
-                       (long)Motor_Left.current_pwm, (long)Motor_Right.current_pwm,
-                       (long)Motor_Left.encoder_speed, (long)Motor_Right.encoder_speed,
-                       (long)Motor_Left.total_position, (long)Motor_Right.total_position);
-                elog_i("MOTOR", "LeftDir1:%d LeftDir2:%d | RightDir1:%d RightDir2:%d",
-                       ld1, ld2, rd1, rd2);
-                last_state  = cur_state;
-                last_circle = cur_circle;
-                last_bc     = cur_bc;
+static void Main_UpdateTrackFeedback(main_runtime_t *runtime, uint32_t now)
+{
+    bool tracking = Track_State_Is_LineTracking(Track.state);
+
+    if (tracking && !runtime->feedback_tracking) {
+        runtime->feedback_tracking = true;
+        runtime->feedback_circle = Track.current_circle;
+        Buzzer_Stop();
+        Buzzer_Request(1u, now);
+    }
+
+    if (runtime->feedback_tracking &&
+        Track.current_circle > runtime->feedback_circle) {
+        uint8_t completed = (uint8_t)(Track.current_circle -
+                                      runtime->feedback_circle);
+        runtime->feedback_circle = Track.current_circle;
+        Buzzer_Request(completed, now);
+    }
+
+    if (runtime->feedback_tracking && !tracking &&
+        Track.state == TRACK_STATE_FINISHED) {
+        runtime->feedback_tracking = false;
+        Buzzer_Stop();
+        Buzzer_Request(3u, now);
+    }
+}
+
+static bool Main_PolarityAllowed(void)
+{
+    safety_state_t state = Safety_GetState();
+    return (state == SAFETY_STATE_BOOT || state == SAFETY_STATE_READY) &&
+           (Track.state == TRACK_STATE_IDLE ||
+            Track.state == TRACK_STATE_FINISHED);
+}
+
+static void Main_HandleKeyPush(uint8_t key)
+{
+    if (key == 0u) {
+        if (Safety_GetState() == SAFETY_STATE_READY) {
+            if (Track_Start()) {
+                elog_i("CTRL", "Tracking started");
+            } else {
+                elog_w("CTRL", "Start blocked: %s", Track_Get_Start_Result());
             }
+        } else {
+            elog_w("CTRL", "Start blocked (safety=%s)", Safety_StateName(Safety_GetState()));
         }
+    } else if (key == 1u) {
+        Track_Stop();
+        elog_i("CTRL", "Tracking stopped");
+    } else if (key == 2u) {
+        Main_UpdateOled(Bsp_GetTick());
+        elog_i("OLED", "Tracking status refreshed");
+    } else if (key == 3u && Main_PolarityAllowed()) {
+        Path_Fish_ToggleBlackPolarity();
+        Safety_ResetPathFishReadiness();
+        Main_UpdateOled(Bsp_GetTick());
+        elog_i("SENSOR", "Path Fish black polarity=%u",
+               Path_Fish_Sensor.black_is_one ? 1u : 0u);
+    } else if (key == 3u) {
+        elog_w("SENSOR", "Polarity change blocked while vehicle active");
+    }
+}
 
-        /* ====== 灰度传感器诊断（每1秒打印8通道ADC原始值+数字值+校准基准） ======
-         * ADC: 原始ADC值, DIG: 黑白判定(0=白 1=黑), CAL: 校准基准(black/white) */
-        if ((now - last_1000ms) >= 1000) {
-            last_1000ms = now;
-            elog_i("GRAY", "ADC_Ch0:%d ADC_Ch1:%d ADC_Ch2:%d ADC_Ch3:%d ADC_Ch4:%d ADC_Ch5:%d ADC_Ch6:%d ADC_Ch7:%d",
-                   Grayscale_Sensor.analog[0], Grayscale_Sensor.analog[1],
-                   Grayscale_Sensor.analog[2], Grayscale_Sensor.analog[3],
-                   Grayscale_Sensor.analog[4], Grayscale_Sensor.analog[5],
-                   Grayscale_Sensor.analog[6], Grayscale_Sensor.analog[7]);
-            elog_i("GRAY", "Digital:%d %d %d %d %d %d %d %d | BlackCount:%d",
-                   Grayscale_Sensor.digital[0], Grayscale_Sensor.digital[1],
-                   Grayscale_Sensor.digital[2], Grayscale_Sensor.digital[3],
-                   Grayscale_Sensor.digital[4], Grayscale_Sensor.digital[5],
-                   Grayscale_Sensor.digital[6], Grayscale_Sensor.digital[7],
-                   Grayscale_Sensor.black_count);
-            elog_i("GRAY", "Cal: Black:%d White:%d | HystHigh:%d HystLow:%d",
-                   Grayscale_Sensor.black[0], Grayscale_Sensor.white[0],
-                   (int)((Grayscale_Sensor.black[0] + Grayscale_Sensor.white[0]) / 2 +
-                         (Grayscale_Sensor.white[0] - Grayscale_Sensor.black[0]) / 4),
-                   (int)((Grayscale_Sensor.black[0] + Grayscale_Sensor.white[0]) / 2 -
-                         (Grayscale_Sensor.white[0] - Grayscale_Sensor.black[0]) / 4));
-        }
+static bool Main_KeyActionAllowed(uint8_t key, bsp_key_event_t event)
+{
+    if (event == BSP_KEY_EVENT_PUSH && key == 3u) return Main_PolarityAllowed();
 
-        if ((now - last_100ms) >= 100) {
-            last_100ms = now;
-            bsp_key_event_t evt;
-            for (uint8_t i = 0; i < BSP_KEY_NUM; i++) {
-                evt = Key_GetEvent(i);
-                if (evt == BSP_KEY_EVENT_IDLE) continue;
-                Led_Toggle(i);
-                if (evt == BSP_KEY_EVENT_PUSH) {
-                    elog_i("KEY", "K%d pressed", (int)i);
-                    if (i == 0) { Track_Start(); elog_i("CTRL", "Tracking started"); }
-                    if (i == 1) { Track_Stop();  elog_i("CTRL", "Tracking stopped"); }
-                    if (i == 2) { Track_Calibrate_White(); elog_i("SENSOR", "White calibrated"); }
-                    if (i == 3) { Track_Calibrate_Black(); elog_i("SENSOR", "Black calibrated"); }
-                } else if (evt == BSP_KEY_EVENT_LONGPUSH) {
-                    elog_i("KEY", "K%d long-pressed", (int)i);
-                    /* K3长按: 速度比例尺自动标定 (国一方案核心, 悬空车轮!) */
-                    if (i == 2) { App_Motor_Calibrate_Scale(); }
+    return event == BSP_KEY_EVENT_LONGPUSH && key == 2u &&
+           Main_StationaryReady();
+}
+
+static void Main_ProcessKeys(void)
+{
+    for (uint8_t key = 0; key < BSP_KEY_NUM; key++) {
+        bsp_key_event_t event = Key_GetEvent(key);
+        bool action_feedback;
+
+        if (event == BSP_KEY_EVENT_IDLE) continue;
+
+        action_feedback = Main_KeyActionAllowed(key, event);
+        Led_Toggle(0u);
+
+        if (event == BSP_KEY_EVENT_PUSH) {
+            elog_i("KEY", "K%d pressed", (int)key);
+            Main_HandleKeyPush(key);
+        } else if (event == BSP_KEY_EVENT_DOUBLECLICK) {
+            elog_i("KEY", "K%d double-click", (int)key);
+            if (key == 0u && Safety_GetState() == SAFETY_STATE_READY) {
+                uint8_t circles = (uint8_t)(Track.target_circles + 1u);
+                if (circles > 5u) circles = 1u;
+                Track_Set_Circles(circles);
+                elog_i("CTRL", "Circles set to %d", circles);
+            }
+        } else if (event == BSP_KEY_EVENT_LONGPUSH) {
+            elog_i("KEY", "K%d long-pressed", (int)key);
+            if (key == 2u) {
+                if (action_feedback && APP_TUNING_MODE) {
+                    Buzzer_Stop();
+                    App_Motor_Calibrate_Scale();
+                } else {
+                    elog_w("CALIB", "Scale calibration blocked: requires TUNING, READY and idle wheels-up bench");
                 }
             }
         }
 
-        {
-            uint8_t frame[BSP_UART_RX_BUF_SIZE + 1];
-            uint16_t len = 0;
-            while (Uart_Get_Frame(frame, &len)) {
-                if (len >= BSP_UART_RX_BUF_SIZE) len = BSP_UART_RX_BUF_SIZE - 1;
-                frame[len] = '\0';
-                elog_i("COMM", "RX(%u): %s", (unsigned)len, (char*)frame);
-            }
+        Buzzer_Request(action_feedback ? 2u : 1u, systick_ms);
+    }
+}
+
+static void Main_ProcessDebugUart(void)
+{
+    uint8_t frame[BSP_UART_RX_BUF_SIZE + 1];
+    uint16_t len = 0;
+    while (Uart_Get_Frame(frame, &len)) {
+        if (len >= BSP_UART_RX_BUF_SIZE) len = BSP_UART_RX_BUF_SIZE - 1u;
+        frame[len] = '\0';
+        elog_i("COMM", "RX(%u): %s", (unsigned)len, (char *)frame);
+    }
+}
+
+static void Main_PollCommunication(void)
+{
+#if APP_ESP01S_ENABLE
+    App_ESP01S_Poll();
+    App_Tuning_Poll();
+    elog_port_esp_flush();
+#elif APP_UART1_DIAG_CONSOLE_ENABLE
+    UART1_Diag_PollEcho();
+#endif
+}
+
+static void Main_RunLoop(void)
+{
+    main_runtime_t runtime = {
+        .last_state = 0xFFu,
+        .last_circle = 0xFFu,
+        .last_black_count = 0xFFu,
+    };
+
+    while (1) {
+        uint32_t now = systick_ms;
+
+        /* 高频连续任务：只推进蜂鸣器节奏状态，不阻塞循迹控制。 */
+        Buzzer_Update(now);
+
+        /* 高频连续任务：推进鱼眼I2C0非阻塞读取，完整帧才通知Safety。 */
+        Main_UpdatePathFish(now);
+
+        /* 高频连续任务：每圈进入主控制；内部按 5 ms 非阻塞更新循迹与速度 PID。 */
+        Main_RunControl(now, &runtime);
+
+        /* OLED使用独立I2C1，每5ms最多刷新一个脏字符。 */
+        App_Oled_Poll(now);
+        if (!s_oled_failure_logged && App_Oled_ErrorCount() != 0u) {
+            s_oled_failure_logged = true;
+            elog_w("OLED", "I2C1 display disabled after error=%lu; motion unaffected",
+                   (unsigned long)App_Oled_ErrorCount());
         }
 
-        /* ESP-01S 调试/遥测低优先级调度：
-         * 运行期发送只入队并由状态机分步推进，不能阻塞运动闭环。 */
-#if APP_ESP01S_ENABLE
-        App_ESP01S_Poll();
-        App_Tuning_Poll();
-        elog_port_esp_flush();
-#elif APP_UART1_DIAG_CONSOLE_ENABLE
-        UART1_Diag_PollEcho();
-#endif
+        /* 定时任务：按键消抖、显示内容、车辆状态和鱼眼诊断。 */
+        if (Main_PeriodElapsed(now, &runtime.last_10ms, 10u)) Key_Scan_Task();
+        if (Main_PeriodElapsed(now, &runtime.last_100ms, 100u)) {
+            Main_ProcessKeys();
+            Main_UpdateOled(now);
+        }
+        if (Main_PeriodElapsed(now, &runtime.last_500ms, 500u)) Main_LogVehicleStatus(&runtime);
+        if (Main_PeriodElapsed(now, &runtime.last_1000ms, 1000u)) Main_LogPathFish();
+
+        /* 事件任务：排空调试串口帧，并推进 ESP/TCP 状态机与遥测队列。 */
+        Main_ProcessDebugUart();
+        Main_PollCommunication();
+        Main_UpdateTrackFeedback(&runtime, now);
     }
+}
+
+int main(void)
+{
+    System_Init();
+#if SELFTEST_MODE && APP_LOG_DIAGNOSTIC_ENABLE
+    Run_SelfTest();
+    elog_i("SYS", "Switching to tracking mode...");
+    Bsp_Delay_ms(500);
+#endif
+    Main_InitializeTracking();
+    Main_RunLoop();
 }

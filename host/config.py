@@ -5,6 +5,7 @@ config.py — 上位机配置加载
 host_config.json 示例：
 {
   "TCP_PORT": 8888,
+  "WEB_HOST": "127.0.0.1",
   "WEB_PORT": 5000,
   "GLM_API_KEY": "your_zhipuai_api_key_here"
 }
@@ -17,10 +18,15 @@ logger = logging.getLogger("config")
 
 
 class Config:
+    TUNING_AUTH_TOKEN = "track_car_2025"
+    # Diagnostic ping cadence; missed heartbeats never alter vehicle motion.
+    HEARTBEAT_INTERVAL_MS = 250
+
     # TCP server 监听端口（与 app_esp01s_cfg.h ESP01S_SERVER_PORT 一致）
     TCP_PORT = 8888
 
     # Web 界面端口
+    WEB_HOST = "127.0.0.1"
     WEB_PORT = 5000
 
     # GLM API key（空则用本地规则引擎，配置后启用 GLM）
@@ -34,9 +40,6 @@ class Config:
 
     # AI 分析取最近 N 帧（100 帧 = 1 秒）
     AI_ANALYZE_FRAMES = 100
-
-    # 前端图表显示点数
-    CHART_POINTS = 200
 
     @classmethod
     def load(cls):
@@ -64,10 +67,10 @@ class Config:
         """返回配置字典（前端展示用）"""
         return {
             "TCP_PORT": self.TCP_PORT,
+            "WEB_HOST": self.WEB_HOST,
             "WEB_PORT": self.WEB_PORT,
             "GLM_API_KEY": "***" if self.GLM_API_KEY else "",
             "GLM_MODEL": self.GLM_MODEL,
             "TELEMETRY_WINDOW": self.TELEMETRY_WINDOW,
             "AI_ANALYZE_FRAMES": self.AI_ANALYZE_FRAMES,
-            "CHART_POINTS": self.CHART_POINTS,
         }

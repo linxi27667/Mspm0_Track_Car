@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP-01S 日志与循迹调参上位机</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="https://cdn.socket.io/4.7.3/socket.io.min.js"></script>
 </head>
 <body>
@@ -18,34 +17,122 @@
             <span id="car-status" class="status-pill status-disconnected">小车: 未连接</span>
             <span id="engine-info" class="status-pill">引擎: -</span>
             <span id="frame-counter" class="status-pill">帧: 0</span>
+            <span id="link-health" class="status-pill">链路: -</span>
+            <span id="mode-badge" class="status-pill mode-tuning">TUNING</span>
             <span id="tcp-info" class="status-pill">TCP: {{ config.TCP_PORT }}</span>
         </div>
     </header>
 
     <main class="console-layout">
         <section class="telemetry-column">
-            <section class="panel chart-panel">
+            <section class="panel telemetry-panel">
                 <div class="panel-title">
-                    <h2>实时遥测</h2>
-                    <span id="track-state" class="panel-meta">状态: -</span>
+                    <h2>实时数据</h2>
+                    <span id="telemetry-age" class="panel-meta">等待数据</span>
                 </div>
-                <div class="chart-grid">
-                    <div class="chart-box">
-                        <h3>灰度 ADC（8 路）</h3>
-                        <canvas id="chart-adc"></canvas>
+                <div class="telemetry-body">
+                    <div class="telemetry-summary">
+                        <div class="data-field state-field">
+                            <span>运行状态</span>
+                            <strong id="tele-state-code">--</strong>
+                            <small id="tele-state-name">等待遥测</small>
+                        </div>
+                        <div class="data-field">
+                            <span>帧序号</span>
+                            <strong id="tele-seq">--</strong>
+                        </div>
+                        <div class="data-field">
+                            <span>MCU 时间</span>
+                            <strong id="tele-ms">--</strong>
+                            <small>ms</small>
+                        </div>
+                        <div class="data-field">
+                            <span>浏览器接收</span>
+                            <strong id="tele-received">--</strong>
+                        </div>
+                        <div class="data-field">
+                            <span>黑线通道</span>
+                            <strong id="tele-bc">--</strong>
+                        </div>
+                        <div class="data-field">
+                            <span>12 位 mask</span>
+                            <strong id="tele-lm">--</strong>
+                        </div>
+                        <div class="data-field">
+                            <span>鱼眼帧龄</span>
+                            <strong id="tele-sa">--</strong>
+                            <small>ms</small>
+                        </div>
+                        <div class="data-field">
+                            <span>鱼眼错误</span>
+                            <strong id="tele-se">--</strong>
+                        </div>
+                        <div class="data-field">
+                            <span>黑线极性</span>
+                            <strong id="tele-bp">--</strong>
+                        </div>
+                        <div class="data-field">
+                            <span>发送丢弃</span>
+                            <strong id="tele-drop">--</strong>
+                        </div>
                     </div>
-                    <div class="chart-box">
-                        <h3>误差 le / 转向 po</h3>
-                        <canvas id="chart-error"></canvas>
+
+                    <section class="data-section">
+                        <h3>12 路鱼眼数字线位（A1 左 → A12 右）</h3>
+                        <div class="line-data-grid">
+                            {% for channel in range(12) %}
+                            <div class="line-value">
+                                <span>A{{ channel + 1 }}</span>
+                                <strong id="tele-line-{{ channel }}">--</strong>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </section>
+
+                    <div class="data-section-grid">
+                        <section class="data-section">
+                            <h3>控制反馈</h3>
+                            <dl class="telemetry-data-grid">
+                                <div><dt>陀螺仪 Z</dt><dd id="tele-gz">--</dd><small>deg/s</small></div>
+                                <div><dt>循迹误差</dt><dd id="tele-le">--</dd></div>
+                                <div><dt>转向输出</dt><dd id="tele-po">--</dd></div>
+                                <div><dt>左编码器</dt><dd id="tele-el">--</dd></div>
+                                <div><dt>右编码器</dt><dd id="tele-er">--</dd></div>
+                            </dl>
+                        </section>
+
+                        <section class="data-section">
+                            <h3>当前参数镜像</h3>
+                            <dl class="telemetry-data-grid compact">
+                                <div title="循迹比例P：偏线纠正力度"><dt>KP 比例</dt><dd id="tele-kp">--</dd></div>
+                                <div title="循迹积分I：通常保持0"><dt>KI 积分</dt><dd id="tele-ki">--</dd></div>
+                                <div title="循迹微分D：抑制左右摆"><dt>KD 微分</dt><dd id="tele-kd">--</dd></div>
+                                <div title="陀螺仪角速度阻尼"><dt>GDAMP</dt><dd id="tele-gd">--</dd></div>
+                                <div title="启动基础PWM"><dt>VBASE</dt><dd id="tele-vb">--</dd></div>
+                                <div title="直道目标PWM"><dt>VSTR</dt><dd id="tele-vs">--</dd></div>
+                                <div title="偏线/弯道目标PWM"><dt>VCUR</dt><dd id="tele-vc">--</dd></div>
+                                <div title="直角最少黑通道数"><dt>RATHR</dt><dd id="tele-rt">--</dd></div>
+                            </dl>
+                        </section>
                     </div>
-                    <div class="chart-box">
-                        <h3>陀螺仪 gz</h3>
-                        <canvas id="chart-gyro"></canvas>
-                    </div>
-                    <div class="chart-box">
-                        <h3>编码器 el / er</h3>
-                        <canvas id="chart-encoder"></canvas>
-                    </div>
+
+                    <section id="tele-motion-section" class="data-section motion-section" hidden>
+                        <h3 id="tele-motion-title">运动控制</h3>
+                        <dl class="telemetry-data-grid">
+                            <div><dt>目标角度</dt><dd id="tele-motion-target">--</dd></div>
+                            <div><dt>实际角度</dt><dd id="tele-motion-actual">--</dd></div>
+                            <div><dt>角度误差</dt><dd id="tele-motion-error">--</dd></div>
+                            <div><dt>结果</dt><dd id="tele-motion-result">--</dd></div>
+                        </dl>
+                    </section>
+
+                    <section class="raw-telemetry">
+                        <div class="raw-telemetry-head">
+                            <h3>当前帧原始 JSON</h3>
+                            <span id="telemetry-source">TCP 未连接</span>
+                        </div>
+                        <pre id="telemetry-raw">等待 MCU 遥测帧</pre>
+                    </section>
                 </div>
             </section>
 
@@ -56,22 +143,50 @@
                 </div>
                 <div class="control-grid">
                     <div id="param-list" class="param-list">
+                        <div class="param-guide">
+                            <h3>这些参数在干什么</h3>
+                            <p>
+                                循迹闭环：12路鱼眼偏差 <code>le</code>
+                                → 线 PID（KP/KI/KD）得到转向
+                                → 再减 <code>GDAMP × 陀螺仪Z</code> 抑制抖动
+                                → 左右轮 ≈ 基础PWM ± 转向。
+                            </p>
+                            <p>
+                                速度：启动用 VBASE；跑起来后按偏差在
+                                VSTR（直道快）与 VCUR（偏线慢）之间插值。
+                                RATHR 只决定“够不够黑”才认方形拐角，不进 PID。
+                            </p>
+                            <p class="param-guide-order">
+                                建议顺序：先 VBASE/VSTR/VCUR 不飞车
+                                → 再 KP → 再 KD → 最后 GDAMP；
+                                KI 保持 0；RATHR 首轮保持 6.0。
+                                改完点「应用参数」，不会自动下发。
+                            </p>
+                        </div>
                         {% for name, info in params.items() %}
                         <div class="param-row" data-name="{{ name }}">
-                            <label title="{{ info.desc }}">
+                            <div class="param-head">
                                 <span class="param-name">{{ name }}</span>
                                 <span class="param-desc">{{ info.desc }}</span>
-                            </label>
-                            <input type="range" class="param-slider"
-                                   min="{{ info.min }}" max="{{ info.max }}"
-                                   step="{{ info.step }}"
-                                   value="{{ current[name] }}"
-                                   data-name="{{ name }}">
-                            <input type="number" class="param-input"
-                                   min="{{ info.min }}" max="{{ info.max }}"
-                                   step="{{ info.step }}"
-                                   value="{{ current[name] }}"
-                                   data-name="{{ name }}">
+                                <span class="param-range">{{ info.min }} ~ {{ info.max }}</span>
+                            </div>
+                            <div class="param-controls">
+                                <input type="range" class="param-slider"
+                                       min="{{ info.min }}" max="{{ info.max }}"
+                                       step="{{ info.step }}"
+                                       value="{{ current[name] }}"
+                                       data-name="{{ name }}"
+                                       title="{{ info.help }}">
+                                <input type="number" class="param-input"
+                                       min="{{ info.min }}" max="{{ info.max }}"
+                                       step="{{ info.step }}"
+                                       value="{{ current[name] }}"
+                                       data-name="{{ name }}"
+                                       title="{{ info.help }}">
+                            </div>
+                            {% if info.help %}
+                            <p class="param-help">{{ info.help }}</p>
+                            {% endif %}
                         </div>
                         {% endfor %}
                     </div>
@@ -81,9 +196,41 @@
                             <button id="btn-apply" class="btn-primary">应用参数</button>
                             <button id="btn-start" class="btn-success">启动</button>
                             <button id="btn-stop" class="btn-danger">停止</button>
-                            <button id="btn-whitecal">白校准</button>
-                            <button id="btn-blackcal">黑校准</button>
                             <button id="btn-reconnect">重连</button>
+                        </div>
+                        <p class="rotate-hint">鱼眼黑白标定在模块板上完成：长按板载K1进入，短按板载K1采白底，短按板载K2采黑线。车载K4仅切换0/1黑线极性。</p>
+
+                        <div class="rotate-card motor-test-card">
+                            <div class="rotate-card-head">
+                                <h3>架空电机测试</h3>
+                                <span id="motor-test-status" class="rotate-status">待命</span>
+                            </div>
+                            <div class="button-grid two">
+                                <button id="btn-motor-test" class="btn-primary">开始分档测试</button>
+                                <button id="btn-motor-test-stop" class="btn-danger">立即停止</button>
+                            </div>
+                            <p class="rotate-hint">仅限驱动轮完全架空：先以PWM 20验证编码器方向，再闭环运行20/30/40三档，全程约4.4秒。</p>
+                        </div>
+
+                        <div class="rotate-card">
+                            <div class="rotate-card-head">
+                                <h3>原地旋转</h3>
+                                <span id="rotate-status" class="rotate-status">待命</span>
+                            </div>
+                            <div class="button-grid two">
+                                <button id="btn-rotate-left" class="btn-primary">左转 90°</button>
+                                <button id="btn-rotate-right" class="btn-primary">右转 90°</button>
+                            </div>
+                            <div class="rotate-custom">
+                                <label for="rotate-deg">角度</label>
+                                <input id="rotate-deg" type="number" min="-180" max="180" step="1" value="90">
+                                <button id="btn-rotate-custom">按设定角度旋转</button>
+                            </div>
+                            <p class="rotate-hint">正数左转，负数右转；不依赖鱼眼，但 MPU 静止校准完成后才可执行。</p>
+                            <div class="heading-hold-control">
+                                <button id="btn-heading-hold" class="btn-secondary">保持当前角度</button>
+                                <span id="heading-hold-status" class="rotate-status">未开启</span>
+                            </div>
                         </div>
 
                         <div class="preset-group">
@@ -119,6 +266,32 @@
                             </div>
                             <div id="auto-rounds-log" class="auto-rounds-log"></div>
                         </div>
+
+                        <div class="optimizer-section">
+                            <h3>本地约束优化器</h3>
+                            <div class="opt-controls">
+                                <label>目标圈数<input type="number" id="opt-target-laps" value="5" min="1" max="5" step="1"></label>
+                                <span id="opt-state-pill" class="opt-state-pill">空闲</span>
+                            </div>
+                            <div class="button-grid">
+                                <button id="btn-opt-start" class="btn-success">启动优化</button>
+                                <button id="btn-opt-confirm" class="btn-primary" disabled>人工确认</button>
+                                <button id="btn-opt-stop" class="btn-danger" disabled>停止</button>
+                            </div>
+                            <div id="opt-status" class="opt-status">
+                                <div class="opt-info-row">
+                                    <span>候选: <em id="opt-candidates">0/0</em></span>
+                                    <span>最佳: <em id="opt-best">-</em></span>
+                                </div>
+                                <div id="opt-message" class="opt-message placeholder">未启动</div>
+                            </div>
+                            <div id="opt-candidate-list" class="opt-candidate-list"></div>
+                            <div class="button-grid two">
+                                <button id="btn-opt-export" class="btn-secondary" disabled>导出报告</button>
+                                <button id="btn-opt-export-race" class="btn-secondary" disabled>导出比赛档</button>
+                            </div>
+                            <div id="opt-race-header" class="opt-race-header"></div>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -150,7 +323,6 @@
         </section>
     </main>
 
-    <script id="config-data" type="application/json">{{ config | tojson | safe }}</script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

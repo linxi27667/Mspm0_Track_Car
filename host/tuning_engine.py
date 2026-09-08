@@ -60,7 +60,7 @@ class LocalRuleEngine:
             1 for i in range(1, n) if errors[i] * errors[i - 1] < 0
         )
         if sign_changes > n * 0.3:
-            new_kd = clamp("KD", current.get("KD", 1.0) * 1.5)
+            new_kd = clamp("KD", current.get("KD", PARAMS["KD"]["default"]) * 1.5)
             triggered.append((
                 {"KD": new_kd},
                 f"误差震荡明显({sign_changes}/{n}帧变号),KD偏小,建议加大50%",
@@ -70,7 +70,7 @@ class LocalRuleEngine:
         # 规则2: 弯道冲出（状态频繁进 LINE_LOST）→ VCUR 太大
         lost_count = sum(1 for s in states if s == "LL")
         if lost_count > n * 0.15:
-            new_vcur = clamp("VCUR", current.get("VCUR", 30) - 5)
+            new_vcur = clamp("VCUR", current.get("VCUR", PARAMS["VCUR"]["default"]) - 5)
             triggered.append((
                 {"VCUR": new_vcur},
                 f"弯道频繁丢线({lost_count}/{n}帧LL状态),VCUR偏大,建议-5",
@@ -80,7 +80,7 @@ class LocalRuleEngine:
         # 规则3: 误差持续偏大（|le| > 2 持续 >50% 帧）→ KP 太小
         big_errors = sum(1 for e in errors if abs(e) > 2.0)
         if big_errors > n * 0.5:
-            new_kp = clamp("KP", current.get("KP", 5.0) * 1.2)
+            new_kp = clamp("KP", current.get("KP", PARAMS["KP"]["default"]) * 1.2)
             triggered.append((
                 {"KP": new_kp},
                 f"误差持续偏大({big_errors}/{n}帧|le|>2),KP偏小,建议加大20%",
@@ -90,7 +90,7 @@ class LocalRuleEngine:
         # 规则4: 直道抖动（gyro_rate 平均幅度过大）→ GDAMP 太小
         avg_gyro = statistics.mean(abs(g) for g in gyro_rates)
         if avg_gyro > 2.0:
-            new_damp = clamp("GDAMP", current.get("GDAMP", 0.15) + 0.05)
+            new_damp = clamp("GDAMP", current.get("GDAMP", PARAMS["GDAMP"]["default"]) + 0.05)
             triggered.append((
                 {"GDAMP": new_damp},
                 f"直道陀螺仪抖动明显(平均|gz|={avg_gyro:.1f}),GDAMP偏小,建议+0.05",
@@ -100,10 +100,10 @@ class LocalRuleEngine:
         # 规则5: 直角弯频繁触发但未完成 → RATHR 偏小
         ra_count = sum(1 for s in states if s == "RA")
         if ra_count > n * 0.15:
-            new_rathr = clamp("RATHR", current.get("RATHR", 2.5) + 0.3)
+            new_rathr = clamp("RATHR", current.get("RATHR", PARAMS["RATHR"]["default"]) + 1.0)
             triggered.append((
                 {"RATHR": new_rathr},
-                f"直角弯频繁触发({ra_count}/{n}帧RA),可能误判,建议RATHR+0.3",
+                f"直角弯频繁触发({ra_count}/{n}帧RA),可能误判,建议RATHR+1",
                 0.4,
             ))
 
@@ -190,10 +190,21 @@ class GlmEngine:
     需配置 GLM_API_KEY。
     """
 
-    SYSTEM_PROMPT = """你是循迹小车 PID 调参专家。根据遥测数据给出参数调整建议。
+    @staticmethod
+    def _build_param_desc() -> str:
+        """从 PARAMS 动态生成参数范围说明，避免硬编码不一致。"""
+        lines = []
+        for name, info in PARAMS.items():
+            lines.append(f"  {name}: {info['desc']}（{info['min']}~{info['max']}）")
+        return "\n".join(lines)
+
+    @property
+    def SYSTEM_PROMPT(self) -> str:
+        return f"""你是循迹小车 PID 调参专家。根据遥测数据给出参数调整建议。
 
 遥测字段说明：
-  adc: 8路灰度ADC原始值（0~4095）
+  line: 12路鱼眼数字黑线位（A1左到A12右，0/1）
+  lm/bc/sa/se/bp: 12位mask、黑点数、完整帧龄、通信错误数、黑线极性
   gz: 陀螺仪Z轴角速度（deg/s）
   el/er: 左/右编码器速度
   le: 循迹误差（正=偏左,负=偏右,0=居中）
@@ -201,20 +212,17 @@ class GlmEngine:
   st: 状态缩写（ID=空闲,LF=循迹,RA=直角弯,LL=丢线,SL=起点,CR=十字,FN=完成）
 
 参数说明：
-  KP: 比例增益（0~50）  KI: 积分增益（0~5）  KD: 微分增益（0~20）
-  GDAMP: 陀螺仪阻尼（0~1）
-  VBASE/VSTR/VCUR: 基础/直道/弯道速度（0~100）
-  RATHR: 直角弯检测阈值（0.5~10）
+{self._build_param_desc()}
 
 调参经验：
   1. 误差震荡（le 频繁变号）→ KD 偏小，加大 50%
   2. 误差持续偏大（|le|>2）→ KP 偏小，加大 20%
   3. 直道抖动（gz 波动大）→ GDAMP 偏小，+0.05
   4. 弯道冲出（频繁 LL）→ VCUR 偏大，-5
-  5. 直角弯误判 → RATHR +0.3
+  5. 直角弯误判 → RATHR +1
 
 只输出 JSON，不要多余文字。格式：
-{"params":{"KP":6.0},"reason":"...","confidence":0.7}
+{{"params":{{"KP":6.0}},"reason":"...","confidence":0.7}}
 """
 
     def __init__(self, api_key: str, model: str = "glm-4-flash"):
@@ -323,11 +331,11 @@ class GlmEngine:
             pass
 
         # 尝试提取 JSON 块（GLM 可能包裹在 ```json ... ``` 中）
-        import re
-        match = re.search(r'\{[^{}]*"params"[^{}]*\}', content, re.DOTALL)
-        if match:
+        # 使用平衡花括号匹配以支持嵌套 JSON 对象（正则 [^{}]* 无法匹配嵌套）
+        extracted = self._extract_balanced_json(content)
+        if extracted is not None:
             try:
-                obj = json.loads(match.group(0))
+                obj = json.loads(extracted)
                 if "params" in obj:
                     obj["params"] = {
                         k: clamp(k, v) for k, v in obj["params"].items() if k in PARAMS
@@ -344,6 +352,39 @@ class GlmEngine:
             "reason": f"GLM 返回无法解析: {content[:200]}",
             "confidence": 0.2,
         }
+
+    @staticmethod
+    def _extract_balanced_json(content: str):
+        """从文本中提取第一个平衡的 JSON 对象（支持嵌套花括号）。
+
+        跳过字符串字面量内的花括号。返回提取的子串或 None。
+        """
+        start = content.find("{")
+        while start != -1:
+            depth = 0
+            in_str = False
+            escape = False
+            for i in range(start, len(content)):
+                ch = content[i]
+                if in_str:
+                    if escape:
+                        escape = False
+                    elif ch == "\\":
+                        escape = True
+                    elif ch == '"':
+                        in_str = False
+                else:
+                    if ch == '"':
+                        in_str = True
+                    elif ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            return content[start:i + 1]
+            # 未找到匹配的右括号，尝试下一个 {
+            start = content.find("{", start + 1)
+        return None
 
 
 # ============================================================

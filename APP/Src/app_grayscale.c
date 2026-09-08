@@ -9,6 +9,7 @@
  */
 #include "app_grayscale.h"
 #include "app_common.h"
+#include "app_log.h"
 #include "ti_msp_dl_config.h"
 #include <elog.h>
 #include <stdbool.h>
@@ -41,7 +42,7 @@ static void HW_Gray_Init(void)
     /* 5. 等待 ADC 稳定 */
     Bsp_Delay_ms(10);
 
-    elog_i("GRAY", "Init: PA27 PINCM60=0x%08lX PWRDN=MANUAL ENC=%d",
+    APP_GRAY_STATE_LOG_I("GRAY", "Init: PA27 PINCM60=0x%08lX PWRDN=MANUAL ENC=%d",
            (unsigned long)IOMUX->SECCFG.PINCM[IOMUX_PINCM60],
            DL_ADC12_isConversionsEnabled(GRAYSCALE_ADC_INST) ? 1 : 0);
 }
@@ -56,7 +57,6 @@ static void HW_Gray_Gpio_Write(void *port, uint32_t pin, uint8_t level)
  * 关键: 每次读取后必须重新 enableConversions, 因为 ENC 位可能被硬件清除 */
 static uint16_t HW_Gray_ADC_Read(void)
 {
-    static uint16_t s_last_adc_result = 0;
     static uint32_t s_last_timeout_log = 0;
 
     /* 清除之前可能残留的中断标志 */
@@ -86,14 +86,14 @@ static uint16_t HW_Gray_ADC_Read(void)
         DL_ADC12_enableConversions(GRAYSCALE_ADC_INST);
         if ((Bsp_GetTick() - s_last_timeout_log) >= 500u) {
             s_last_timeout_log = Bsp_GetTick();
-            elog_w("GRAY", "ADC timeout, reuse last=%u", s_last_adc_result);
+            APP_GRAY_STATE_LOG_W("GRAY", "ADC timeout ch=%u, frame invalid",
+                                 (unsigned)Grayscale_Sensor.current_ch);
         }
-        return s_last_adc_result;
+        return BSP_GRAY_ADC_INVALID;
     }
 
     /* 读取结果（12位，0~4095） */
     uint16_t result = DL_ADC12_getMemResult(GRAYSCALE_ADC_INST, DL_ADC12_MEM_IDX_0);
-    s_last_adc_result = result;
 
     /* 清除中断标志, 为下次读取做准备 */
     DL_ADC12_clearInterruptStatus(GRAYSCALE_ADC_INST,
@@ -144,4 +144,10 @@ void Grayscale_Calibrate_White(void)
 void Grayscale_Calibrate_Black(void)
 {
     Bsp_Grayscale_Calibrate_Black(&Grayscale_Sensor);
+}
+
+bool Grayscale_Calibration_Valid(uint16_t minimum_contrast)
+{
+    return Bsp_Grayscale_Calibration_Valid(&Grayscale_Sensor,
+                                           minimum_contrast);
 }

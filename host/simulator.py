@@ -1,236 +1,276 @@
-"""
-simulator.py — 小车遥测模拟器
+"""TC1 protocol simulator for the track-car host."""
 
-模拟 MSPM0 循迹小车端行为，连接上位机 TCP server，发送 100Hz 遥测 JSON，
-接收并响应下行参数/指令。
+from __future__ import annotations
 
-用途：固件烧录前验证上位机逻辑闭环（波形/AI/参数下发）。
-
-运行：
-  python simulator.py [host] [port]
-  默认 host=127.0.0.1, port=8888
-"""
+import math
+import random
 import socket
 import sys
-import time
-import json
-import math
 import threading
-import random
+import time
 
-# 默认参数（与 protocol.PARAMS 一致）
-DEFAULT_PARAMS = {
-    "KP": 5.0,
-    "KI": 0.0,
-    "KD": 1.0,
-    "GDAMP": 0.15,
-    "VBASE": 40,
-    "VSTR": 50,
-    "VCUR": 30,
-    "RATHR": 2.5,
-}
-
-# 模拟场景：正弦误差 + 噪声 + 偶尔丢线
-SCENE_PERIOD = 20.0  # 20 秒一个完整误差周期
+from protocol import (
+    MAX_FRAME_BYTES,
+    PARAMS,
+    ProtocolError,
+    build_ack,
+    decode_frame,
+    encode_frame,
+    validate_ping,
+    validate_request,
+)
 
 
-def simulate(host="127.0.0.1", port=8888):
-    """启动模拟器"""
+DEFAULT_PARAMS = {name: info["default"] for name, info in PARAMS.items()}
+SCENE_CYCLE = 20.0
+TELEMETRY_INTERVAL = 0.01
+
+
+def simulate(host: str = "127.0.0.1", port: int = 8888):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(1.0)
     try:
         sock.connect((host, port))
-    except ConnectionRefusedError:
-        print(f"[SIM] 无法连接 {host}:{port}，请先启动上位机 (python app.py)")
+    except OSError as exc:
+        print(f"[SIM] 无法连接 {host}:{port}: {exc}")
+        sock.close()
         return
 
     print(f"[SIM] 已连接上位机 {host}:{port}")
-    print(f"[SIM] 开始发送 100Hz 遥测，按 Ctrl+C 退出")
+    print("[SIM] 开始发送 100Hz TC1 遥测，按 Ctrl+C 退出")
 
-    # 共享参数（接收线程修改，发送线程读取）
     params = dict(DEFAULT_PARAMS)
-    params_lock = threading.Lock()
-    running = {"alive": True}
-
-    # 当前状态（模拟状态机）
     state = {"current": "LF"}
+    state_lock = threading.Lock()
+    send_lock = threading.Lock()
+    stop_event = threading.Event()
+
+    def send_message(message) -> bool:
+        try:
+            frame = encode_frame(message)
+            with send_lock:
+                sock.sendall(frame)
+            return True
+        except (OSError, ProtocolError) as exc:
+            if not stop_event.is_set():
+                print(f"[SIM] 发送失败: {exc}")
+            stop_event.set()
+            return False
+
+    def send_nack(message: dict, error: str):
+        request_id = message.get("id")
+        kind = "set" if "set" in message else "cmd" if "cmd" in message else None
+        if isinstance(request_id, int) and not isinstance(request_id, bool) and kind:
+            send_message(build_ack(request_id, False, kind, error=error[:256]))
+
+    def handle_request(message: dict):
+        try:
+            request = validate_request(message)
+        except ProtocolError as exc:
+            print(f"[SIM] 拒绝请求: {exc}")
+            send_nack(message, str(exc))
+            return
+
+        request_id = request["id"]
+        if "set" in request:
+            with state_lock:
+                motor_names = {"MKP", "MKI", "MKD", "MSL", "MSR"}
+                if motor_names & set(request["set"]) and state["current"] not in {"ID", "MT"}:
+                    send_message(build_ack(
+                        request_id, False, "set",
+                        error="motor_tuning_requires_idle",
+                    ))
+                    return
+                params.update(request["set"])
+                applied = dict(params)
+            print(f"[SIM] 收到参数 id={request_id}: {request['set']}")
+            send_message(build_ack(request_id, True, "set", applied=applied))
+            return
+
+        cmd = request["cmd"]
+        with state_lock:
+            if cmd == "start":
+                state["current"] = "LF"
+            elif cmd == "stop":
+                state["current"] = "ID"
+        print(f"[SIM] 收到指令 id={request_id}: {cmd}")
+        send_message(build_ack(request_id, True, "cmd"))
 
     def recv_loop():
-        """接收线程：解析下行参数/指令
-
-        用 JSONDecoder.raw_decode 处理嵌套 JSON (如 {"set":{"KP":7.5}}),
-        不能简单按 } 分割 (嵌套对象会断开)。
-        """
-        buf = b""
-        decoder = json.JSONDecoder()
-        while running["alive"]:
+        buf = bytearray()
+        while not stop_event.is_set():
             try:
-                data = sock.recv(256)
+                data = sock.recv(4096)
+            except socket.timeout:
+                continue
             except OSError:
                 break
             if not data:
                 break
-            buf += data
-            # 尝试从 buf 开头解析完整 JSON 对象（可能多个连在一起）
-            while buf:
-                try:
-                    text = buf.decode("utf-8")
-                    stripped = text.lstrip()
-                    if not stripped:
-                        buf = b""
-                        break
-                    obj, end = decoder.raw_decode(stripped)
-                    consumed = len(text) - len(stripped) + end
-                    buf = buf[consumed:]
-                except json.JSONDecodeError:
-                    # 数据不完整，等下次 recv
-                    break
-                except UnicodeDecodeError:
-                    buf = b""
-                    break
 
-                msg = obj
-                if "set" in msg:
-                    with params_lock:
-                        params.update(msg["set"])
-                    print(f"[SIM] 收到参数: {msg['set']} → 当前: {params}")
-                elif "cmd" in msg:
-                    cmd = msg["cmd"]
-                    print(f"[SIM] 收到指令: {cmd}")
-                    if cmd == "start":
-                        state["current"] = "LF"
-                    elif cmd == "stop":
-                        state["current"] = "ID"
-                    elif cmd == "whitecal":
-                        print("[SIM] 模拟白色校准完成")
-                    elif cmd == "blackcal":
-                        print("[SIM] 模拟黑色校准完成")
-                    elif cmd == "reconnect":
-                        print("[SIM] 模拟重连")
+            buf.extend(data)
+            while True:
+                newline = buf.find(b"\n")
+                if newline < 0:
+                    break
+                line = bytes(buf[: newline + 1])
+                del buf[: newline + 1]
+                if len(line) > MAX_FRAME_BYTES:
+                    print(f"[SIM] 丢弃超长帧: {len(line)} bytes")
+                    continue
+                try:
+                    message = decode_frame(line)
+                except ProtocolError as exc:
+                    print(f"[SIM] 丢弃坏帧: {exc}")
+                    continue
+
+                if message.get("t") == "ping":
+                    try:
+                        send_message(validate_ping(message))
+                    except ProtocolError as exc:
+                        print(f"[SIM] 丢弃无效 ping: {exc}")
+                else:
+                    handle_request(message)
+
+            if len(buf) >= MAX_FRAME_BYTES:
+                print("[SIM] 未终止帧超过上限，断开连接")
+                break
+        stop_event.set()
 
     threading.Thread(target=recv_loop, daemon=True, name="sim-recv").start()
 
-    # 发送遥测（100Hz）
-    t = 0.0
+    start_time = time.monotonic()
+    next_send = start_time
+    prev_error = 0.0
     frame_count = 0
 
-    # 场景循环：每 20 秒一个完整循环
-    #   0-5s   直道（小误差 + 陀螺抖动）
-    #   5-10s  弯道（大误差正弦）
-    #   10-13s 直角弯（误差突到极值）
-    #   13-15s 丢线（全白）
-    #   15-20s 恢复循迹
-    SCENE_CYCLE = 20.0
-    prev_error = 0.0  # 用于 PID 微分（跨帧保持）
-
     try:
-        while running["alive"]:
-            with params_lock:
+        while not stop_event.is_set():
+            now = time.monotonic()
+            if now < next_send:
+                time.sleep(min(next_send - now, TELEMETRY_INTERVAL))
+                continue
+            next_send += TELEMETRY_INTERVAL
+            if now - next_send > 0.5:
+                next_send = now + TELEMETRY_INTERVAL
+
+            elapsed = now - start_time
+            with state_lock:
                 p = dict(params)
+                requested_state = state["current"]
 
-            scene_t = t % SCENE_CYCLE
-
-            # 场景调度
-            if scene_t < 5.0:
-                # 直道：小误差 + 陀螺抖动
-                error = 0.3 * math.sin(t * 2.0) + random.gauss(0, 0.15)
-                gyro = 1.5 * math.sin(t * 5.0) + random.gauss(0, 0.3)  # 陀螺抖动明显
-                st = "LF"
-            elif scene_t < 10.0:
-                # 弯道：大误差正弦
-                error = 2.8 * math.sin((scene_t - 5.0) * 1.2) + random.gauss(0, 0.2)
-                gyro = 0.5 * math.cos((scene_t - 5.0) * 1.2) + random.gauss(0, 0.2)
-                st = "LF"
-                # 弯道丢线概率
-                if abs(error) > 3.0 and random.random() < 0.08:
-                    st = "LL"
-            elif scene_t < 13.0:
-                # 直角弯：误差突到极值
-                if scene_t < 11.0:
-                    error = 3.2 + random.gauss(0, 0.1)
-                    st = "RA"
-                    gyro = 5.0  # 直角弯角速度大
-                else:
-                    error = -0.5 + random.gauss(0, 0.1)
-                    st = "LF"
-                    gyro = random.gauss(0, 0.2)
-            elif scene_t < 15.0:
-                # 丢线：全白
-                error = 0.0
-                gyro = 0.3 + random.gauss(0, 0.1)
-                st = "LL"
-            else:
-                # 恢复循迹
-                error = 0.5 * math.sin(t * 1.5) + random.gauss(0, 0.15)
-                gyro = 0.2 * math.sin(t * 1.5) + random.gauss(0, 0.2)
-                st = "LF"
-
-            # PID 转向输出（用当前 KP/KD）
-            turn = p["KP"] * error + p["KD"] * (error - prev_error) * 10  # 10=微分增益
+            error, gyro, track_state = _scene_values(elapsed)
+            error = max(-3.5, min(3.5, error))
+            raw_turn = p["KP"] * error + p["KD"] * (error - prev_error) * 10
             prev_error = error
+            turn = max(-100.0, min(100.0, raw_turn))
 
-            # 编码器：基础速度 + 转向差速
-            base = p["VBASE"]
-            left_speed = int(base - turn * 0.5)
-            right_speed = int(base + turn * 0.5)
+            if requested_state == "ID":
+                error = 0.0
+                gyro = 0.0
+                turn = 0.0
+                track_state = "ID"
+                left_speed = 0
+                right_speed = 0
+            else:
+                base = p["VBASE"]
+                left_speed = int(base - turn * 0.5)
+                right_speed = int(base + turn * 0.5)
 
-            # 灰度 ADC：模拟 8 路，中间通道随误差变化
-            adc = []
-            for i in range(8):
-                pos = i - 3.5
-                dist = abs(pos - error)
-                base_adc = 2000 - int(1500 * math.exp(-dist * 0.5))
-                base_adc += random.randint(-50, 50)
-                adc.append(max(0, min(4095, base_adc)))
-
-            # 丢线时全白
-            if st == "LL":
-                adc = [random.randint(80, 120) for _ in range(8)]
-
-            tele = {
+            line = _simulate_line(error, track_state)
+            line_mask = sum(bit << index for index, bit in enumerate(line))
+            frame_count += 1
+            telemetry = {
+                "v": 1,
                 "t": "tele",
-                "adc": adc,
+                "seq": frame_count & 0xFFFFFFFF,
+                "ms": int(elapsed * 1000) & 0xFFFFFFFF,
+                "line": line,
+                "lm": line_mask,
+                "bc": sum(line),
+                "sa": 5,
+                "se": 0,
+                "bp": 1,
                 "gz": round(gyro, 2),
                 "el": left_speed,
                 "er": right_speed,
                 "le": round(error, 2),
                 "po": round(turn, 2),
-                "st": st,
+                "st": track_state,
                 "kp": p["KP"],
+                "ki": p["KI"],
                 "kd": p["KD"],
+                "gd": p["GDAMP"],
+                "vb": p["VBASE"],
+                "vs": p["VSTR"],
+                "vc": p["VCUR"],
+                "rt": p["RATHR"],
+                "drop": 0,
             }
-
-            try:
-                sock.sendall((json.dumps(tele) + "\n").encode("utf-8"))
-            except OSError:
-                print("[SIM] 连接断开")
+            if not send_message(telemetry):
                 break
 
-            frame_count += 1
             if frame_count % 100 == 0:
-                print(f"[SIM] 已发送 {frame_count} 帧, t={t:.1f}s, error={error:.2f}, st={st}")
-
-            # 模拟 elog 透传日志：每 50 帧（0.5 秒）发一行 JSON 封装日志
-            # 固件 elog_port_esp_flush 把 elog 输出封装为 {"t":"log","msg":"..."}\n
+                print(f"[SIM] 已发送 {frame_count} 帧, t={elapsed:.1f}s, error={error:.2f}, st={track_state}")
             if frame_count % 50 == 0:
-                # 模拟 elog 格式：[时间戳] I/标签 日志内容
-                msg = f"[{int(t*1000)}] I/track State:{st} Error:{error:.2f} KP:{p['KP']:.1f} KD:{p['KD']:.1f}"
-                log_frame = json.dumps({"t": "log", "msg": msg}, separators=(",", ":")) + "\n"
-                try:
-                    sock.sendall(log_frame.encode("utf-8"))
-                except OSError:
-                    pass
-
-            t += 0.01
-            time.sleep(0.01)
-
+                send_message({
+                    "v": 1,
+                    "t": "log",
+                    "msg": f"I/track [{int(elapsed * 1000)}] State:{track_state} Error:{error:.2f} KP:{p['KP']:.1f} KD:{p['KD']:.1f}",
+                })
     except KeyboardInterrupt:
         print("\n[SIM] 退出")
     finally:
-        running["alive"] = False
+        stop_event.set()
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         sock.close()
 
 
+def _scene_values(elapsed: float) -> tuple[float, float, str]:
+    scene_t = elapsed % SCENE_CYCLE
+    if scene_t < 5.0:
+        return (
+            0.3 * math.sin(elapsed * 2.0) + random.gauss(0, 0.15),
+            1.5 * math.sin(elapsed * 5.0) + random.gauss(0, 0.3),
+            "LF",
+        )
+    if scene_t < 10.0:
+        error = 2.8 * math.sin((scene_t - 5.0) * 1.2) + random.gauss(0, 0.2)
+        state = "LL" if abs(error) > 3.0 and random.random() < 0.08 else "LF"
+        return error, 0.5 * math.cos((scene_t - 5.0) * 1.2) + random.gauss(0, 0.2), state
+    if scene_t < 11.0:
+        return 3.2 + random.gauss(0, 0.1), 5.0, "RA"
+    if scene_t < 13.0:
+        return -0.5 + random.gauss(0, 0.1), random.gauss(0, 0.2), "LF"
+    if scene_t < 15.0:
+        return 0.0, 0.3 + random.gauss(0, 0.1), "LL"
+    return (
+        0.5 * math.sin(elapsed * 1.5) + random.gauss(0, 0.15),
+        0.2 * math.sin(elapsed * 1.5) + random.gauss(0, 0.2),
+        "LF",
+    )
+
+
+def _simulate_line(error: float, state: str) -> list[int]:
+    if state == "LL":
+        return [0] * 12
+    if state == "RA":
+        return [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+
+    line = [0] * 12
+    position = max(0.0, min(11.0, (error + 3.5) * 11.0 / 7.0))
+    left = int(math.floor(position))
+    right = min(11, left + 1)
+    line[left] = 1
+    if right != left and position - left > 0.25:
+        line[right] = 1
+    return line
+
+
 if __name__ == "__main__":
-    host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 8888
-    simulate(host, port)
+    target_host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
+    target_port = int(sys.argv[2]) if len(sys.argv) > 2 else 8888
+    simulate(target_host, target_port)

@@ -1,0 +1,9 @@
+@echo off
+rem 打开SysConfig GUI并加载当前项目的syscfg配置文件
+rem 用法: 双击运行
+
+set SYSCFG_DIR=E:\MCU\MSPM0\sysconfig
+set SYSCFG_FILE=E:\MCU\MSPM0\Contest\TI_moban\TI_moban.syscfg
+set NW="%SYSCFG_DIR%\nw\nw.exe"
+
+start "" %NW% "%SYSCFG_DIR%" "%SYSCFG_FILE%" --device "MSPM0G350X" --package "LQFP-64(PM)" --product "mspm0_sdk@1.30.00.03"

@@ -1,0 +1,150 @@
+SEGGER J-Link Commander V9.58 (Compiled Jul  9 2026 16:00:07)
+DLL version V9.58, compiled Jul  9 2026 15:59:07
+
+
+J-Link Command File read successfully.
+Processing script file...
+J-Link>si 1
+J-Link connection not established yet but required for command.
+Connecting to J-Link ...O.K.
+Firmware: J-Link V9 compiled May  7 2021 16:26:12
+Hardware version: V9.50
+J-Link uptime (since boot): N/A (Not supported by this model)
+S/N: 69514110
+License(s): RDI,FlashBP,FlashDL,JFlash,GDB
+VTref=3.290V
+Selecting SWD as current target interface.
+J-Link>speed 4000
+Selecting 4000 kHz as target interface speed
+J-Link>device MSPM0G3507
+J-Link>connect
+Device "MSPM0G3507" selected.
+
+
+Connecting to target via SWD
+InitTarget() start
+DAP initialized successfully.
+No AHB-AP
+Device will be unsecured now.
+InitTarget() end - Took 291s
+Found SW-DP with ID 0x6BA02477
+DPIDR: 0x6BA02477
+CoreSight SoC-400 or earlier
+Scanning AP map to find all available APs
+AP[0]: Stopped AP scan as end of AP map seems to be reached
+Iterating through AP map to find AHB-AP to use
+Attach to CPU failed. Executing connect under reset.
+DPIDR: 0x6BA02477
+CoreSight SoC-400 or earlier
+Scanning AP map to find all available APs
+AP[0]: Stopped AP scan as end of AP map seems to be reached
+Iterating through AP map to find AHB-AP to use
+Could not find core in Coresight setup
+InitTarget() start
+DAP initialized successfully.
+No AHB-AP
+Device will be unsecured now.
+Can not attach to CPU. Performing mass erase
+Boot diagnostic = 0x00000007
+Mass erase failed.
+Device will be unsecured now.
+Can not attach to CPU. Performing factory reset
+Boot diagnostic = 0x00000007
+Factory reset failed.
+InitTarget() end - Took 5.54s
+
+****** Error: J-Link script file function InitTarget() returned with error code -1
+Error occurred: Could not connect to the target device.
+For troubleshooting steps visit: https://kb.segger.com/J-Link_Troubleshooting
+J-Link>loadfile "E:\MCU\MSPM0\Contest\Track_Car\keil\Objects\gpio_toggle_output_LP_MSPM0G3507_nortos_keil.hex"
+Target connection not established yet but required for command.
+Device "MSPM0G3507" selected.
+
+
+Connecting to target via SWD
+InitTarget() start
+DAP initialized successfully.
+No AHB-AP
+Device will be unsecured now.
+Can not attach to CPU. Performing mass erase
+Boot diagnostic = 0x00000007
+Mass erase failed.
+Skipping unsecure.
+User selected to not factory reset the device.
+InitTarget() end - Took 2.00s
+InitTarget() start
+DAP initialized successfully.
+No AHB-AP
+Device will be unsecured now.
+Can not attach to CPU. Performing mass erase
+Boot diagnostic = 0x00000007
+Mass erase failed.
+Could not connect to MSPM0 device.
+For debugger connection the device needs a factory reset.
+Note: This will erase the entire device and user data and reset the NONMAIN section to factory defaults.
+Executing default behavior previously saved in the registry.
+Device will be unsecured now.
+Can not attach to CPU. Performing factory reset
+Boot diagnostic = 0x00000007
+Factory reset failed.
+InitTarget() end - Took 5.08s
+
+****** Error: J-Link script file function InitTarget() returned with error code -1
+
+Error occurred: Could not connect to the target device.
+For troubleshooting steps visit: https://kb.segger.com/J-Link_Troubleshooting
+J-Link>r
+Target connection not established yet but required for command.
+Device "MSPM0G3507" selected.
+
+
+Connecting to target via SWD
+InitTarget() start
+DAP initialized successfully.
+No AHB-AP
+Could not connect to MSPM0 device.
+For debugger connection the device needs a mass erase.
+Note: This will erase the entire device and user data.
+Executing default behavior previously saved in the registry.
+Device will be unsecured now.
+Can not attach to CPU. Performing mass erase
+Boot diagnostic = 0x00000007
+Mass erase failed.
+Could not connect to MSPM0 device.
+For debugger connection the device needs a factory reset.
+Note: This will erase the entire device and user data and reset the NONMAIN section to factory defaults.
+Executing default behavior previously saved in the registry.
+Device will be unsecured now.
+Can not attach to CPU. Performing factory reset
+Boot diagnostic = 0x00000007
+Factory reset failed.
+InitTarget() end - Took 2.07s
+InitTarget() start
+DAP initialized successfully.
+No AHB-AP
+Could not connect to MSPM0 device.
+For debugger connection the device needs a mass erase.
+Note: This will erase the entire device and user data.
+Executing default behavior previously saved in the registry.
+Device will be unsecured now.
+Can not attach to CPU. Performing mass erase
+Boot diagnostic = 0x00000007
+Mass erase failed.
+Could not connect to MSPM0 device.
+For debugger connection the device needs a factory reset.
+Note: This will erase the entire device and user data and reset the NONMAIN section to factory defaults.
+Executing default behavior previously saved in the registry.
+Device will be unsecured now.
+Can not attach to CPU. Performing factory reset
+Boot diagnostic = 0x00000007
+Factory reset failed.
+InitTarget() end - Took 2.07s
+
+****** Error: J-Link script file function InitTarget() returned with error code -1
+
+Error occurred: Could not connect to the target device.
+For troubleshooting steps visit: https://kb.segger.com/J-Link_Troubleshooting
+J-Link>q
+
+Script processing completed.
+

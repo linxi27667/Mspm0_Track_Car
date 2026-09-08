@@ -10,6 +10,7 @@ keil/flash_log.txt
 # Debug scripts and temp files
 *.jlink
 *.ps1
+!scripts/*.ps1
 ram_dump.bin
 rtt_*.txt
 rtt_*.bin
@@ -45,8 +46,9 @@ Thumbs.db
 -LogFile
 .trae/
 host/.host_build_tmp/
-host/__pycache__/
+__pycache__/
 host/*.log
+logs/closed_loop/
 Event.dot
 README.html
 jlink_rtt_*.txt
@@ -56,3 +58,8 @@ keil/EventRecorderStub.scvd
 keil/JLinkSettings.ini
 keil/*.uvguix.*
 docs/pinout_mapping.md
+
+# Local hardware captures and vendor reference packages
+/logs/
+/docs/鱼眼循迹模块.zip
+/docs/鱼眼循迹模块/

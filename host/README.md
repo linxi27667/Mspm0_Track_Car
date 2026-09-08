@@ -2,17 +2,19 @@
 
 PC 端上位机，对接 MSPM0 循迹小车固件（ESP-01S WiFi 透传），实现 AI 远程闭环调参。
 
+**角色边界**：上位机仅做调试与日志，不参与运动依赖。车载运动以已接受指令与本地状态机为准；上位机断连、TCP/Wi-Fi 丢失或心跳缺失不得停止、暂停或改变任何进行中的运动。
+
 ## 架构
 
 ```
 ┌─────────────┐   UART1+DMA    ┌──────────┐   TCP/JSON    ┌─────────────┐
 │  MSPM0G3507 │ ──────────────>│ ESP-01S  │ ────────────> │   上位机    │
-│  循迹小车   │   100Hz 遥测   │  (AT透传)│  <──────────  │  Flask+WS   │
+│  循迹小车   │    10Hz 遥测   │  (AT透传)│  <──────────  │  Flask+WS   │
 │  (track.c)  │ <─────────────│          │   set/cmd     │             │
 └─────────────┘   set/cmd      └──────────┘               └──────┬──────┘
                                                                      │
                                                           ┌──────────┴──────────┐
-                                                          │  浏览器 (Chart.js)  │
+                                                           │  浏览器实时数据台   │
                                                           │  + LocalRuleEngine  │
                                                           │  + GLM API (可选)   │
                                                           └─────────────────────┘
@@ -27,10 +29,10 @@ PC 端上位机，对接 MSPM0 循迹小车固件（ESP-01S WiFi 透传），实
 | `tuning_engine.py` | 调参引擎（LocalRuleEngine 6 条规则 + GlmEngine GLM-4-Flash） |
 | `config.py` | 配置类（端口/窗口/AI 分析帧数等） |
 | `app.py` | Flask + SocketIO 主程序 |
-| `templates/index.html` | Web 界面（深色主题，4 个 Chart.js 图表 + 参数面板） |
-| `static/app.js` | 前端逻辑（SocketIO 客户端 + 图表更新 + 参数收发） |
+| `templates/index.html` | Web 界面（原始遥测数据台 + 参数面板） |
+| `static/app.js` | 前端逻辑（SocketIO 客户端 + 数据更新 + 参数收发） |
 | `static/style.css` | 深色主题样式 |
-| `simulator.py` | 小车端模拟器（无实车验证用，100Hz 遥测 + 接收参数/指令） |
+| `simulator.py` | 小车端模拟器（无实车验证用，100Hz 压力遥测 + 接收参数/指令） |
 | `requirements.txt` | Python 依赖 |
 
 ## 快速开始
@@ -66,27 +68,33 @@ python simulator.py
 
 **参数设置**（字段可选，缺省字段不改）：
 ```json
-{"set":{"KP":2.5,"KI":0.0,"KD":1.0,"GDAMP":0.15,"VBASE":40,"VSTR":50,"VCUR":30,"RATHR":2.5}}
+{"set":{"KP":3.5,"KI":0.0,"KD":1.5,"GDAMP":0.25,"VBASE":18,"VSTR":20,"VCUR":16,"RATHR":6.0}}
+{"set":{"MKP":0.55,"MKI":0.0,"MKD":0.0,"MSL":0.367,"MSR":0.375}}
 ```
 
 **控制指令**：
 ```json
 {"cmd":"start"}      // 启动循迹
 {"cmd":"stop"}       // 停止
-{"cmd":"whitecal"}   // 白色校准
-{"cmd":"blackcal"}   // 黑色校准
 {"cmd":"reconnect"}  // 重连 WiFi
 ```
 
-### 上行（小车 → PC，100Hz，以 `\n` 结尾）
+鱼眼黑白标定改由模块板载按键完成，不再提供旧八路 ADC 的远程白/黑校准命令。电机环与比例尺仅允许 TUNING 构建在车辆静止或电机台架测试时修改。
+
+### 上行（小车 → PC，10Hz，以 `\n` 结尾）
 
 ```json
-{"t":"tele","adc":[v0,v1,v2,v3,v4,v5,v6,v7],"gz":0.12,"el":1024,"er":980,"le":0.3,"po":45,"st":"LF","kp":5.0,"kd":1.0}
+{"v":1,"t":"tele","line":[0,0,0,0,0,1,1,0,0,0,0,0],"lm":96,"bc":2,"sa":7,"se":0,"bp":1,"gz":0.12,"el":20,"er":19,"le":0.0,"po":0,"st":"LF"}
 ```
 
 | 字段 | 含义 | 范围 |
 |------|------|------|
-| `adc` | 8 路灰度原始 ADC | 0~4095 |
+| `line` | A1→A12 统一后的黑线位 | 12 个 `0/1` |
+| `lm` | 12 位黑线掩码，bit0=A1 | 0~4095 |
+| `bc` | 当前黑点数 | 0~12 |
+| `sa` | 最近完整鱼眼帧龄 | ms |
+| `se` | 鱼眼通信错误累计值 | ≥0 |
+| `bp` | 黑线原始极性 | 0/1 |
 | `gz` | 陀螺仪 Z 轴角速度 | deg/s |
 | `el`/`er` | 左/右编码器速度 | pulse/5ms |
 | `le` | 循迹误差 | -3.5~+3.5 |
@@ -98,14 +106,19 @@ python simulator.py
 
 | 参数 | 范围 | 默认 | 说明 |
 |------|------|------|------|
-| `KP` | 0~50 | 5.0 | 循迹比例增益 |
+| `KP` | 0~50 | 3.5 | 循迹比例增益 |
 | `KI` | 0~5 | 0.0 | 循迹积分增益 |
-| `KD` | 0~20 | 1.0 | 循迹微分增益 |
-| `GDAMP` | 0~1 | 0.15 | 陀螺仪阻尼系数 |
-| `VBASE` | 0~100 | 40 | 基础速度 |
-| `VSTR` | 0~100 | 50 | 直道速度 |
-| `VCUR` | 0~100 | 30 | 弯道速度 |
-| `RATHR` | 0.5~10 | 2.5 | 直角弯检测阈值 |
+| `KD` | 0~20 | 1.5 | 循迹微分增益 |
+| `GDAMP` | 0~1 | 0.25 | 陀螺仪阻尼系数 |
+| `VBASE` | 0~100 | 18 | 基础 PWM 百分比 |
+| `VSTR` | 0~100 | 20 | 直道 PWM 百分比 |
+| `VCUR` | 0~100 | 16 | 弯道 PWM 百分比 |
+| `RATHR` | 5~10（整数） | 6.0 | 直角候选最少黑通道数 |
+| `MKP` | 0~5 | 0.55 | 电机速度环 P |
+| `MKI` | 0~1 | 0.0 | 电机速度环 I |
+| `MKD` | 0~5 | 0.0 | 电机速度环 D |
+| `MSL` | 0.01~2 | 0.367 | 左电机前馈比例尺 |
+| `MSR` | 0.01~2 | 0.375 | 右电机前馈比例尺 |
 
 ## AI 调参
 
@@ -119,7 +132,7 @@ python simulator.py
 | 误差偏大（平均 |error| > 1.5） | KP +20% | 0.7 |
 | 陀螺仪抖动（|gz| > 2 deg/s） | GDAMP +0.05 | 0.6 |
 | 弯道频繁丢线（LL 状态 > 5%） | VCUR -5 | 0.6 |
-| 直角弯频繁（RA 状态 > 10%） | RATHR +0.3 | 0.6 |
+| 直角弯频繁（RA 状态 > 10%） | RATHR +1 | 0.6 |
 | 正常 | 无建议 | 0.5 |
 
 ### GLM 引擎（配置 API key 后启用）
@@ -149,14 +162,16 @@ python simulator.py
 ```json
 {
   "TCP_PORT": 8888,
+  "WEB_HOST": "127.0.0.1",
   "WEB_PORT": 5000,
   "GLM_API_KEY": "",
   "GLM_MODEL": "glm-4-flash",
   "TELEMETRY_WINDOW": 500,
-  "AI_ANALYZE_FRAMES": 100,
-  "CHART_POINTS": 200
+  "AI_ANALYZE_FRAMES": 100
 }
 ```
+
+Web 默认只监听本机。确需从局域网访问时，显式设置 `WEB_HOST`，并同时做好主机防火墙和访问控制。
 
 ## 硬件注意事项（ESP-01S）
 
@@ -178,9 +193,9 @@ python simulator.py
 ## 验证状态
 
 - ✅ 协议层单元测试（parse_telemetry/build_set/build_cmd/clamp）
-- ✅ TCP 遥测接收（100Hz，按 `\n` 分割）
+- ✅ TCP 遥测接收（固件 10Hz、模拟器 100Hz，按 `\n` 分割）
 - ✅ SocketIO 状态查询（frame_count/client_connected/engine）
 - ✅ LocalRuleEngine 震荡规则触发（建议 KD +50%）
 - ✅ 参数下发端到端（上位机 → TCP → 模拟器接收）
-- ✅ 控制指令下发（start/stop/whitecal/blackcal/reconnect）
-- ✅ 浏览器实时波形（4 个 Chart.js 图表）
+- ✅ 控制指令下发（start/stop/reconnect）及鱼眼 12 路遥测
+- ✅ 浏览器逐帧显示 MCU 遥测字段和原始 JSON

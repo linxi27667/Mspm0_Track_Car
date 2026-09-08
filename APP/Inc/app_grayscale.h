@@ -30,5 +30,6 @@ void App_Grayscale_Init(void);
 void Grayscale_Update(void);
 void Grayscale_Calibrate_White(void);
 void Grayscale_Calibrate_Black(void);
+bool Grayscale_Calibration_Valid(uint16_t minimum_contrast);
 
 #endif /* APP_GRAYSCALE_H */

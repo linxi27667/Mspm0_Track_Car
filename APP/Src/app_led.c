@@ -18,9 +18,6 @@ static void HW_Gpio_Write(void *port, uint32_t pin, uint8_t level)
 
 led_t Led_Devices[BSP_LED_NUM] = {
     {LED1_PORT, LED1_PIN, 0, HW_Gpio_Write},
-    {LED2_PORT, LED2_PIN, 0, HW_Gpio_Write},
-    {LED3_PORT, LED3_PIN, 0, HW_Gpio_Write},
-    {LED4_PORT, LED4_PIN, 0, HW_Gpio_Write},
 };
 
 /* ================= 3. 对外业务切入点 ================= */

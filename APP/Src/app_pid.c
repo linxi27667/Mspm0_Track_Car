@@ -4,6 +4,7 @@
  */
 #include "app_pid.h"
 #include <stddef.h>
+#include <math.h>
 
 //=====PID一次业务函数=====
 void Pid_Init(bsp_pid_t *pid, float kp, float ki, float kd,
@@ -30,6 +31,7 @@ void Pid_Init(bsp_pid_t *pid, float kp, float ki, float kd,
 void Pid_Set_Params(bsp_pid_t *pid, float kp, float ki, float kd)
 {
     if (pid == NULL) return;
+    if (!isfinite(kp) || !isfinite(ki) || !isfinite(kd)) return;
     pid->kp = kp;
     pid->ki = ki;
     pid->kd = kd;
@@ -38,6 +40,10 @@ void Pid_Set_Params(bsp_pid_t *pid, float kp, float ki, float kd)
 float Pid_Compute(bsp_pid_t *pid, float target, float feedback)
 {
     if (pid == NULL) return 0;
+    if (!isfinite(target) || !isfinite(feedback)) {
+        Pid_Reset(pid);
+        return 0;
+    }
 
     pid->error = target - feedback;
 

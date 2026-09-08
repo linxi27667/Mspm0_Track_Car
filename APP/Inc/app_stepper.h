@@ -8,7 +8,7 @@
 #include "bsp_stepper.h"
 
 /* ============ 步进电机X硬件配置 ============ */
-/* PA1已被I2C0_SCL占用, 步进引脚迁移到PA2/PA3 */
+/* 步进电机继续使用 PA2/PA3；PA0/PA1 已由本次 IMU 迁移释放。 */
 #define STEPPER_X_DIR_PORT          GPIOA
 #define STEPPER_X_DIR_PIN           DL_GPIO_PIN_2
 #define STEPPER_X_STEP_PORT         GPIOA

@@ -16,11 +16,11 @@
 #ifndef APP_ESP01S_CFG_H
 #define APP_ESP01S_CFG_H
 
+#include "app_common.h"
+
 /* ============================================================
  * 1. WiFi 热点（现场修改）
  * ============================================================ */
-#define ESP01S_WIFI_SSID            "Ll"
-#define ESP01S_WIFI_PASS            "ljc12345"
 
 /* UART1 PA8/PA9 has two exclusive roles:
  *   APP_ESP01S_ENABLE=0: external USB-TTL diagnostic console at 115200 8N1.
@@ -28,10 +28,6 @@
  *
  * Current default is diagnostic console because PA8/PA9 were just verified with
  * USB-TTL. Set APP_ESP01S_ENABLE to 1 when ESP-01S is connected. */
-#ifndef APP_ESP01S_ENABLE
-#define APP_ESP01S_ENABLE           1
-#endif
-
 #ifndef APP_UART1_DIAG_CONSOLE_ENABLE
 #define APP_UART1_DIAG_CONSOLE_ENABLE  (!APP_ESP01S_ENABLE)
 #endif
@@ -40,9 +36,6 @@
  * 2. TCP 服务器（PC 上位机）
  *    上位机监听此端口，小车主动 TCP CONNECT 上去
  * ============================================================ */
-#define ESP01S_SERVER_IP            "10.23.42.31"
-#define ESP01S_SERVER_PORT          8888
-
 /* ============================================================
  * 3. ESP-01S UART 硬件绑定（引用 SysConfig 生成的符号，避免双份定义）
  *    对应 SysConfig 实例 UART_ESP01S（UART1 外设，PA8 TX / PA9 RX）
@@ -87,5 +80,9 @@
  *    ESP-01S 上电后需 ~500ms 跑完 bootloader 才能响应 AT
  * ============================================================ */
 #define ESP01S_BOOT_DELAY_MS        800
+
+/* ESP transparent-mode escape requires a silent guard interval before and
+ * after the raw +++ sequence. This runs only while the MCU is starting. */
+#define ESP01S_ESCAPE_GUARD_MS       1000
 
 #endif /* APP_ESP01S_CFG_H */

@@ -1,0 +1,30 @@
+@echo off
+rem 启动 SysConfig 图形化界面加载当前项目的 TI_moban.syscfg
+rem 双击此文件即可打开 SysConfig GUI
+
+set "SYSCONFIG_DIR=D:\ti"
+set "SDK_ROOT=D:\ti\mspm0_sdk_1_30_00_03"
+set "PROJ_DIR=%~dp0"
+set "SYSCFG_FILE=%PROJ_DIR%TI_moban.syscfg"
+
+if not exist "%SYSCONFIG_DIR%\nw\nw.exe" (
+    echo SysConfig executable not found: %SYSCONFIG_DIR%\nw\nw.exe
+    exit /b 1
+)
+
+if not exist "%SDK_ROOT%\.metadata\product.json" (
+    echo MSPM0 SDK product file not found: %SDK_ROOT%\.metadata\product.json
+    exit /b 1
+)
+
+if not exist "%SYSCFG_FILE%" (
+    echo Project configuration not found: %SYSCFG_FILE%
+    exit /b 1
+)
+
+echo Starting SysConfig GUI...
+echo   SysConfig: %SYSCONFIG_DIR%
+echo   SDK:       %SDK_ROOT%
+echo   Config:    %SYSCFG_FILE%
+
+start "" "%SYSCONFIG_DIR%\nw\nw.exe" "%SYSCONFIG_DIR%" --compiler keil -s "%SDK_ROOT%\.metadata\product.json" "%SYSCFG_FILE%"

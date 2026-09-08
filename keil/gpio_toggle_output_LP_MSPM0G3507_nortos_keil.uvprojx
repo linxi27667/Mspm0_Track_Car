@@ -138,7 +138,7 @@
           </Flash1>
           <bUseTDR>1</bUseTDR>
           <Flash2>BIN\UL2CM3.DLL</Flash2>
-          <Flash3></Flash3>
+          <Flash3>"" ()</Flash3>
           <Flash4></Flash4>
           <pFcarmOut></pFcarmOut>
           <pFcarmGrp></pFcarmGrp>
@@ -455,6 +455,16 @@
               <FilePath>..\APP\Inc\app_led.h</FilePath>
             </File>
             <File>
+              <FileName>app_buzzer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\Src\app_buzzer.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_buzzer.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\APP\Inc\app_buzzer.h</FilePath>
+            </File>
+            <File>
               <FileName>app_uart.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\APP\Src\app_uart.c</FilePath>
@@ -465,14 +475,14 @@
               <FilePath>..\APP\Inc\app_uart.h</FilePath>
             </File>
             <File>
-              <FileName>app_grayscale.c</FileName>
+              <FileName>app_path_fish.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\APP\Src\app_grayscale.c</FilePath>
+              <FilePath>..\APP\Src\app_path_fish.c</FilePath>
             </File>
             <File>
-              <FileName>app_grayscale.h</FileName>
+              <FileName>app_path_fish.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\APP\Inc\app_grayscale.h</FilePath>
+              <FilePath>..\APP\Inc\app_path_fish.h</FilePath>
             </File>
             <File>
               <FileName>app_sw_i2c.c</FileName>
@@ -485,14 +495,24 @@
               <FilePath>..\APP\Inc\app_sw_i2c.h</FilePath>
             </File>
             <File>
-              <FileName>app_mpu6050.c</FileName>
+              <FileName>app_oled.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\APP\Src\app_mpu6050.c</FilePath>
+              <FilePath>..\APP\Src\app_oled.c</FilePath>
             </File>
             <File>
-              <FileName>app_mpu6050.h</FileName>
+              <FileName>app_oled.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\APP\Inc\app_mpu6050.h</FilePath>
+              <FilePath>..\APP\Inc\app_oled.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_imu.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\Src\app_imu.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_imu.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\APP\Inc\app_imu.h</FilePath>
             </File>
             <File>
               <FileName>app_pid.c</FileName>
@@ -534,6 +554,26 @@
               <FileType>5</FileType>
               <FilePath>..\APP\Inc\app_tuning.h</FilePath>
             </File>
+            <File>
+              <FileName>app_safety.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\Src\app_safety.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_safety.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\APP\Inc\app_safety.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_tc1.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\Src\app_tc1.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_tc1.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\APP\Inc\app_tc1.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -548,6 +588,11 @@
               <FileName>track.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\TASK\track.h</FilePath>
+            </File>
+            <File>
+              <FileName>imu_health_logic.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\TASK\imu_health_logic.h</FilePath>
             </File>
           </Files>
         </Group>
@@ -595,6 +640,16 @@
               <FilePath>..\BSP\Inc\bsp_led.h</FilePath>
             </File>
             <File>
+              <FileName>bsp_buzzer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\Src\bsp_buzzer.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_buzzer.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\bsp_buzzer.h</FilePath>
+            </File>
+            <File>
               <FileName>bsp_uart.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BSP\Src\bsp_uart.c</FilePath>
@@ -605,14 +660,14 @@
               <FilePath>..\BSP\Inc\bsp_uart.h</FilePath>
             </File>
             <File>
-              <FileName>bsp_grayscale.c</FileName>
+              <FileName>bsp_path_fish.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\BSP\Src\bsp_grayscale.c</FilePath>
+              <FilePath>..\BSP\Src\bsp_path_fish.c</FilePath>
             </File>
             <File>
-              <FileName>bsp_grayscale.h</FileName>
+              <FileName>bsp_path_fish.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\BSP\Inc\bsp_grayscale.h</FilePath>
+              <FilePath>..\BSP\Inc\bsp_path_fish.h</FilePath>
             </File>
             <File>
               <FileName>bsp_sw_i2c.c</FileName>
@@ -625,14 +680,34 @@
               <FilePath>..\BSP\Inc\bsp_sw_i2c.h</FilePath>
             </File>
             <File>
-              <FileName>bsp_mpu6050.c</FileName>
+              <FileName>bsp_oled.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\BSP\Src\bsp_mpu6050.c</FilePath>
+              <FilePath>..\BSP\Src\bsp_oled.c</FilePath>
             </File>
             <File>
-              <FileName>bsp_mpu6050.h</FileName>
+              <FileName>bsp_oled_font.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\Src\bsp_oled_font.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_oled.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\BSP\Inc\bsp_mpu6050.h</FilePath>
+              <FilePath>..\BSP\Inc\bsp_oled.h</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_oled_font.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\bsp_oled_font.h</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_imu660rb.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\Src\bsp_imu660rb.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_imu660rb.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\Inc\bsp_imu660rb.h</FilePath>
             </File>
             <File>
               <FileName>bsp_esp_at.c</FileName>

@@ -1,7 +1,5 @@
 "use strict";
 
-const config = JSON.parse(document.getElementById("config-data").textContent);
-const CHART_POINTS = config.CHART_POINTS || 200;
 const MAX_CAR_LOGS = 500;
 
 const socket = io();
@@ -15,109 +13,164 @@ socket.on("disconnect", () => {
     console.log("[WS] disconnected");
 });
 
-const chartColors = [
-    "#6bd6d0", "#e4b363", "#82d173", "#f36b5f",
-    "#7ca8ff", "#c48cff", "#d9e76c", "#f18f9f",
-];
-
-function makeChart(canvasId, datasets) {
-    const canvas = document.getElementById(canvasId);
-    return new Chart(canvas.getContext("2d"), {
-        type: "line",
-        data: {
-            labels: Array(CHART_POINTS).fill(""),
-            datasets: datasets.map((ds, i) => ({
-                label: ds.label,
-                data: Array(CHART_POINTS).fill(null),
-                borderColor: ds.color || chartColors[i % chartColors.length],
-                backgroundColor: "transparent",
-                borderWidth: 1.6,
-                pointRadius: 0,
-                tension: 0.26,
-            })),
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: false,
-            interaction: { intersect: false, mode: "nearest" },
-            plugins: {
-                legend: {
-                    labels: { color: "#a49f90", boxWidth: 10, font: { size: 10 } },
-                },
-            },
-            scales: {
-                x: {
-                    display: false,
-                    grid: { color: "rgba(255,255,255,0.06)" },
-                },
-                y: {
-                    grid: { color: "rgba(255,255,255,0.06)" },
-                    ticks: { color: "#767266", font: { size: 10 } },
-                },
-            },
-        },
-    });
-}
-
-const chartAdc = makeChart(
-    "chart-adc",
-    Array.from({ length: 8 }, (_, i) => ({ label: `AD${i}`, color: chartColors[i] }))
-);
-const chartError = makeChart("chart-error", [
-    { label: "le", color: "#6bd6d0" },
-    { label: "po", color: "#e4b363" },
-]);
-const chartGyro = makeChart("chart-gyro", [
-    { label: "gz", color: "#82d173" },
-]);
-const chartEncoder = makeChart("chart-encoder", [
-    { label: "el", color: "#7ca8ff" },
-    { label: "er", color: "#f36b5f" },
-]);
-
-function pushData(chart, values) {
-    values.forEach((value, index) => {
-        const dataset = chart.data.datasets[index];
-        if (!dataset) return;
-        dataset.data.push(value);
-        if (dataset.data.length > CHART_POINTS) dataset.data.shift();
-    });
-    chart.update("none");
-}
-
 let frameCount = 0;
+let lastTelemetryReceivedAt = null;
+let currentTrackState = "??";
+const motorParamNames = new Set(["MKP", "MKI", "MKD", "MSL", "MSR"]);
+
+const stateMap = {
+    ID: "空闲",
+    LF: "循迹",
+    RA: "直角弯",
+    LL: "丢线",
+    SL: "起点",
+    CR: "十字",
+    RT: "原地旋转",
+    HH: "航向保持",
+    MT: "电机测试",
+    FN: "完成",
+};
+
+function setTelemetryText(id, value, digits = null) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    if (typeof value === "number" && Number.isFinite(value) && digits !== null) {
+        element.textContent = value.toFixed(digits);
+        return;
+    }
+    element.textContent = value ?? "--";
+}
+
+function updateMotorParamAvailability(state) {
+    const allowed = ["ID", "FN", "MT"].includes(state);
+    motorParamNames.forEach((name) => {
+        document.querySelectorAll(`[data-name="${name}"]`).forEach((element) => {
+            element.disabled = !allowed;
+        });
+    });
+}
+
+function updateMotionData(tele) {
+    const section = document.getElementById("tele-motion-section");
+    if (["tg", "ta", "te", "rr"].every((key) => key in tele)) {
+        section.hidden = false;
+        setTelemetryText("tele-motion-title", "原地旋转");
+        setTelemetryText("tele-motion-target", tele.tg, 2);
+        setTelemetryText("tele-motion-actual", tele.ta, 2);
+        setTelemetryText("tele-motion-error", tele.te, 2);
+        setTelemetryText("tele-motion-result", tele.rr);
+        return;
+    }
+    if (["hh", "ht", "ha", "he", "hr"].every((key) => key in tele)) {
+        section.hidden = false;
+        setTelemetryText("tele-motion-title", "航向保持");
+        setTelemetryText("tele-motion-target", tele.ht, 2);
+        setTelemetryText("tele-motion-actual", tele.ha, 2);
+        setTelemetryText("tele-motion-error", tele.he, 2);
+        setTelemetryText("tele-motion-result", tele.hr);
+        return;
+    }
+    section.hidden = true;
+}
+
+let motorTestRunning = false;
+let motorTestPending = false;
+
+function setMotorTestStatus(text, state = "idle") {
+    const status = document.getElementById("motor-test-status");
+    const startButton = document.getElementById("btn-motor-test");
+    if (!status || !startButton) return;
+    status.textContent = text;
+    status.className = `rotate-status is-${state}`;
+    startButton.disabled = state === "pending" || state === "running";
+}
+
+function updateMotorTestData(tele) {
+    if (tele.st === "MT" && tele.mt === true) {
+        motorTestRunning = true;
+        motorTestPending = false;
+        const mode = tele.mph < 3 ? `开环正转第${tele.mph + 1}档`
+            : (tele.mph < 6 ? `闭环正转第${tele.mph - 2}档`
+            : (tele.mph < 9 ? `闭环反转第${tele.mph - 5}档` : "停车残留检查"));
+        setMotorTestStatus(
+            `${mode} 目标${tele.mtg} PWM L${tele.mlp}/R${tele.mrp} 编码 L${tele.el}/R${tele.er}`,
+            "running",
+        );
+        return;
+    }
+    if (motorTestRunning) {
+        motorTestRunning = false;
+        setMotorTestStatus("测试已结束，请查看 MOTORTEST 日志", "complete");
+    }
+}
 
 socket.on("telemetry", (tele) => {
     frameCount += 1;
     document.getElementById("frame-counter").textContent = `帧: ${frameCount}`;
 
-    pushData(chartAdc, tele.adc || []);
-    pushData(chartError, [tele.le, tele.po]);
-    pushData(chartGyro, [tele.gz]);
-    pushData(chartEncoder, [tele.el, tele.er]);
+    lastTelemetryReceivedAt = Date.now();
+    currentTrackState = tele.st;
+    updateMotorParamAvailability(currentTrackState);
+    setTelemetryText("tele-state-code", tele.st);
+    setTelemetryText("tele-state-name", stateMap[tele.st] || "未知状态");
+    setTelemetryText("tele-seq", tele.seq);
+    setTelemetryText("tele-ms", tele.ms);
+    setTelemetryText("tele-received", new Date(lastTelemetryReceivedAt).toLocaleTimeString());
+    setTelemetryText("tele-bc", tele.bc);
+    setTelemetryText("tele-lm", `0x${Number(tele.lm).toString(16).toUpperCase().padStart(3, "0")}`);
+    setTelemetryText("tele-sa", tele.sa);
+    setTelemetryText("tele-se", tele.se);
+    setTelemetryText("tele-bp", tele.bp === 1 ? "1=黑" : "0=黑");
+    setTelemetryText("tele-drop", tele.drop);
 
-    const stateMap = {
-        ID: "空闲",
-        LF: "循迹",
-        RA: "直角弯",
-        LL: "丢线",
-        SL: "起点",
-        CR: "十字",
-        FN: "完成",
-    };
-    document.getElementById("track-state").textContent =
-        `状态: ${stateMap[tele.st] || tele.st || "-"}`;
+    (tele.line || []).forEach((value, index) => {
+        setTelemetryText(`tele-line-${index}`, value);
+    });
+
+    setTelemetryText("tele-gz", tele.gz, 2);
+    setTelemetryText("tele-le", tele.le, 2);
+    setTelemetryText("tele-po", tele.po, 2);
+    setTelemetryText("tele-el", tele.el);
+    setTelemetryText("tele-er", tele.er);
+    setTelemetryText("tele-kp", tele.kp, 3);
+    setTelemetryText("tele-ki", tele.ki, 3);
+    setTelemetryText("tele-kd", tele.kd, 3);
+    setTelemetryText("tele-gd", tele.gd, 3);
+    setTelemetryText("tele-vb", tele.vb);
+    setTelemetryText("tele-vs", tele.vs);
+    setTelemetryText("tele-vc", tele.vc);
+    setTelemetryText("tele-rt", tele.rt, 3);
+    updateMotionData(tele);
+    updateMotorTestData(tele);
+    document.getElementById("telemetry-raw").textContent = JSON.stringify(tele, null, 2);
+
+    updateLinkHealth(tele);
 });
+
+setInterval(() => {
+    const ageElement = document.getElementById("telemetry-age");
+    if (!ageElement) {
+        return;
+    }
+    if (lastTelemetryReceivedAt === null) {
+        ageElement.textContent = "等待数据";
+        return;
+    }
+    const ageMs = Date.now() - lastTelemetryReceivedAt;
+    ageElement.textContent = `更新于 ${ageMs} ms 前`;
+    ageElement.classList.toggle("is-stale", ageMs > 500);
+}, 250);
 
 socket.on("client_status", (data) => {
     const el = document.getElementById("car-status");
     if (data.connected) {
         el.textContent = `小车: 已连接 ${data.addr}`;
         el.className = "status-pill status-connected";
+        document.getElementById("telemetry-source").textContent = `TCP ${data.addr}`;
     } else {
         el.textContent = "小车: 未连接";
         el.className = "status-pill status-disconnected";
+        document.getElementById("telemetry-source").textContent = "TCP 未连接";
     }
 });
 
@@ -125,6 +178,14 @@ socket.on("status", (data) => {
     document.getElementById("engine-info").textContent = `引擎: ${data.engine}`;
     if (typeof data.frame_count === "number" && data.frame_count > frameCount) {
         document.getElementById("frame-counter").textContent = `帧: ${data.frame_count}`;
+    }
+
+    // 请求待确认状态
+    if (typeof data.request_pending === "boolean") {
+        const pill = document.getElementById("link-health");
+        if (data.request_pending) {
+            pill.classList.add("link-warn");
+        }
     }
 });
 
@@ -142,6 +203,8 @@ document.querySelectorAll(".param-slider").forEach((slider) => {
 function collectParams() {
     const params = {};
     document.querySelectorAll(".param-input").forEach((input) => {
+        if (motorParamNames.has(input.dataset.name) &&
+            !["ID", "FN", "MT"].includes(currentTrackState)) return;
         const value = Number.parseFloat(input.value);
         if (!Number.isNaN(value)) params[input.dataset.name] = value;
     });
@@ -162,9 +225,124 @@ function sendCmd(cmd) {
 
 document.getElementById("btn-start").addEventListener("click", () => sendCmd("start"));
 document.getElementById("btn-stop").addEventListener("click", () => sendCmd("stop"));
-document.getElementById("btn-whitecal").addEventListener("click", () => sendCmd("whitecal"));
-document.getElementById("btn-blackcal").addEventListener("click", () => sendCmd("blackcal"));
 document.getElementById("btn-reconnect").addEventListener("click", () => sendCmd("reconnect"));
+
+document.getElementById("btn-motor-test").addEventListener("click", () => {
+    const warning = "确认以下条件全部满足：\n\n1. 两个驱动轮完全架空\n2. 车身已经固定\n3. 手和线缆远离车轮\n4. 激光模块已关闭\n\n开始约4.4秒的电机分档测试？";
+    if (!confirm(warning)) return;
+    motorTestPending = true;
+    setMotorTestStatus("等待固件确认", "pending");
+    socket.emit("send_motor_test", { lifted: true });
+});
+
+document.getElementById("btn-motor-test-stop").addEventListener("click", () => {
+    sendCmd("stop");
+});
+
+const rotateControls = [
+    document.getElementById("btn-rotate-left"),
+    document.getElementById("btn-rotate-right"),
+    document.getElementById("btn-rotate-custom"),
+];
+const rotateStatus = document.getElementById("rotate-status");
+const rotateInput = document.getElementById("rotate-deg");
+const headingHoldButton = document.getElementById("btn-heading-hold");
+const headingHoldStatus = document.getElementById("heading-hold-status");
+let headingHoldActive = false;
+
+function setRotateControlsDisabled(disabled) {
+    rotateControls.forEach((button) => { button.disabled = disabled; });
+}
+
+function setRotateStatus(text, state = "idle") {
+    rotateStatus.textContent = text;
+    rotateStatus.className = `rotate-status is-${state}`;
+}
+
+function requestRotate(degrees) {
+    if (!Number.isFinite(degrees) || degrees === 0 || Math.abs(degrees) > 180) {
+        setRotateStatus("角度必须在 -180~180 且不能为 0", "fault");
+        return;
+    }
+    const direction = degrees > 0 ? "左转（逆时针）" : "右转（顺时针）";
+    if (!confirm(`确认原地${direction} ${Math.abs(degrees)}°？`)) return;
+    setRotateControlsDisabled(true);
+    setRotateStatus(`等待确认 ${degrees.toFixed(1)}°`, "pending");
+    socket.emit("send_rotate", { deg: degrees });
+}
+
+document.getElementById("btn-rotate-left").addEventListener("click", () => requestRotate(90));
+document.getElementById("btn-rotate-right").addEventListener("click", () => requestRotate(-90));
+document.getElementById("btn-rotate-custom").addEventListener("click", () => {
+    requestRotate(Number.parseFloat(rotateInput.value));
+});
+
+function setHeadingHoldStatus(text, active = false, pending = false) {
+    headingHoldActive = active;
+    headingHoldButton.disabled = pending;
+    headingHoldButton.textContent = active ? "停止航向保持" : "保持当前角度";
+    headingHoldStatus.textContent = text;
+    headingHoldStatus.className = `rotate-status is-${pending ? "pending" : active ? "running" : "idle"}`;
+}
+
+headingHoldButton.addEventListener("click", () => {
+    if (headingHoldActive) {
+        setHeadingHoldStatus("正在关闭", true, true);
+        sendCmd("heading_hold_off");
+        setTimeout(() => setHeadingHoldStatus("已关闭"), 250);
+        return;
+    }
+    if (!confirm("确认保持当前车身角度？")) return;
+    setHeadingHoldStatus("等待确认", false, true);
+    sendCmd("heading_hold_on");
+});
+
+socket.on("heading_hold_status", (data) => {
+    const target = Number(data.target_deg).toFixed(1);
+    const actual = Number(data.actual_deg).toFixed(1);
+    const error = Number(data.error_deg).toFixed(1);
+    setHeadingHoldStatus(`保持中 目标${target}° 当前${actual}° 误差${error}°`, data.active === true);
+});
+
+socket.on("rotate_status", (data) => {
+    const state = data.state || "terminal";
+    const result = data.result || "unknown";
+    if (state === "running") {
+        const target = Number(data.target_deg).toFixed(1);
+        const actual = Number(data.actual_deg).toFixed(1);
+        const error = Number(data.error_deg).toFixed(1);
+        setRotateStatus(`执行中 目标${target}° 实际${actual}° 误差${error}°`, "running");
+        return;
+    }
+    setRotateControlsDisabled(false);
+    if (state === "rejected") {
+        setRotateStatus(`已拒绝: ${result}`, "fault");
+    } else {
+        setRotateStatus(`结束: ${result}`, result === "complete" ? "complete" : "fault");
+    }
+});
+
+socket.on("request_status", (data) => {
+    if (data.state === "pending" && data.cmd === "motor_test") {
+        motorTestPending = true;
+        setMotorTestStatus("等待固件确认", "pending");
+        return;
+    }
+    if (data.state === "pending" && data.cmd === "rotate") return;
+    if (data.state === "rejected" || data.state === "timeout") {
+        if (motorTestPending) {
+            motorTestPending = false;
+            const motorDetail = data.message || data.error || "unknown";
+            setMotorTestStatus(`测试请求失败: ${motorDetail}`, "fault");
+        }
+        setRotateControlsDisabled(false);
+        const detail = data.message || data.error || "unknown";
+        setRotateStatus(data.state === "timeout" ? `请求超时: ${detail}` : `已拒绝: ${detail}`, "fault");
+        if (headingHoldButton.disabled) {
+            setHeadingHoldStatus(data.state === "timeout" ? "航向保持请求超时" : `航向保持被拒绝: ${detail}`);
+        }
+    }
+});
 
 let lastSuggestion = null;
 
@@ -343,16 +521,16 @@ carLogExportBtn.addEventListener("click", () => {
 
 const PRESETS = {
     conservative: {
-        KP: 3.0, KI: 0.0, KD: 2.0, GDAMP: 0.20,
-        VBASE: 30, VSTR: 40, VCUR: 20, RATHR: 2.5,
+        KP: 3.5, KI: 0.0, KD: 1.5, GDAMP: 0.25,
+        VBASE: 28, VSTR: 30, VCUR: 26, RATHR: 4.0,
     },
     balanced: {
         KP: 5.0, KI: 0.0, KD: 1.0, GDAMP: 0.15,
-        VBASE: 40, VSTR: 50, VCUR: 30, RATHR: 2.5,
+        VBASE: 40, VSTR: 50, VCUR: 30, RATHR: 4.0,
     },
     aggressive: {
         KP: 8.0, KI: 0.0, KD: 0.5, GDAMP: 0.10,
-        VBASE: 60, VSTR: 70, VCUR: 45, RATHR: 3.0,
+        VBASE: 60, VSTR: 70, VCUR: 45, RATHR: 4.0,
     },
 };
 
@@ -423,6 +601,204 @@ socket.on("auto_tuning_round", (snapshot) => {
     autoRoundsLog.appendChild(div);
     autoRoundsLog.scrollTop = autoRoundsLog.scrollHeight;
     while (autoRoundsLog.children.length > 50) autoRoundsLog.removeChild(autoRoundsLog.firstChild);
+});
+
+// ============================================================
+// 链路健康追踪
+// ============================================================
+
+let lastSeq = null;
+let lastMs = null;
+let lastFrameTime = null;
+let dropCount = 0;
+
+function updateLinkHealth(tele) {
+    const linkEl = document.getElementById("link-health");
+    const seq = tele.seq;
+    const ms = tele.ms;
+
+    // 帧间隔（浏览器侧）
+    const now = Date.now();
+    let intervalMs = 0;
+    if (lastFrameTime) intervalMs = now - lastFrameTime;
+    lastFrameTime = now;
+
+    // 丢帧统计
+    if (typeof seq === "number" && lastSeq !== null) {
+        const expected = (lastSeq + 1) & 0xFFFF;
+        if (seq !== expected) {
+            const lost = ((seq - expected + 0x10000) & 0xFFFF);
+            dropCount += lost;
+        }
+    }
+    if (typeof seq === "number") lastSeq = seq;
+
+    // MCU 帧年龄（浏览器接收时 ms 可能陈旧）
+    let ageMs = 0;
+    if (typeof ms === "number") {
+        if (lastMs !== null) {
+            // 检测 MCU 时间回退（重启）
+            if (ms < lastMs) lastMs = ms;
+        }
+        lastMs = ms;
+    }
+
+    // 链路健康分级
+    let cls = "link-good";
+    let label = "良好";
+    if (!intervalMs) {
+        label = "-";
+    } else if (intervalMs > 500 || dropCount > 50) {
+        cls = "link-bad";
+        label = `差(${intervalMs}ms,丢${dropCount})`;
+    } else if (intervalMs > 200 || dropCount > 10) {
+        cls = "link-warn";
+        label = `延迟(${intervalMs}ms,丢${dropCount})`;
+    } else {
+        label = `${intervalMs}ms,丢${dropCount}`;
+    }
+    linkEl.textContent = `链路: ${label}`;
+    linkEl.className = `status-pill ${cls}`;
+}
+
+// ============================================================
+// 本地约束优化器
+// ============================================================
+
+const optStateMap = {
+    idle: "空闲",
+    proposing: "生成候选",
+    awaiting_confirm: "等待确认",
+    applying: "下发参数",
+    running_trial_1: "试验1",
+    running_trial_2: "试验2",
+    rolling_back: "回滚",
+    converged: "收敛",
+    aborted: "中止",
+};
+
+const btnOptStart = document.getElementById("btn-opt-start");
+const btnOptConfirm = document.getElementById("btn-opt-confirm");
+const btnOptStop = document.getElementById("btn-opt-stop");
+const btnOptExport = document.getElementById("btn-opt-export");
+const btnOptExportRace = document.getElementById("btn-opt-export-race");
+const optStatePill = document.getElementById("opt-state-pill");
+const optCandidatesEl = document.getElementById("opt-candidates");
+const optBestEl = document.getElementById("opt-best");
+const optMessageEl = document.getElementById("opt-message");
+const optCandidateList = document.getElementById("opt-candidate-list");
+
+btnOptStart.addEventListener("click", () => {
+    const targetLaps = Number.parseInt(document.getElementById("opt-target-laps").value, 10) || 5;
+    if (!confirm(`启动优化器？目标 ${targetLaps} 圈，将自动搜索最佳参数。`)) return;
+    socket.emit("optimizer_start", { target_laps: targetLaps });
+});
+
+btnOptConfirm.addEventListener("click", () => {
+    socket.emit("optimizer_confirm");
+});
+
+btnOptStop.addEventListener("click", () => {
+    socket.emit("optimizer_stop");
+});
+
+btnOptExport.addEventListener("click", () => {
+    socket.emit("optimizer_export");
+});
+
+btnOptExportRace.addEventListener("click", () => {
+    socket.emit("optimizer_export_race");
+});
+
+socket.on("optimizer_state", (data) => {
+    const state = data.state || "idle";
+    const label = optStateMap[state] || state;
+    optStatePill.textContent = label;
+
+    // 状态样式
+    optStatePill.className = "opt-state-pill";
+    if (["running_trial_1", "running_trial_2", "proposing", "applying"].includes(state)) {
+        optStatePill.classList.add("is-active");
+    } else if (state === "awaiting_confirm") {
+        optStatePill.classList.add("is-awaiting");
+    } else if (["aborted", "rolling_back"].includes(state)) {
+        optStatePill.classList.add("is-fault");
+    }
+
+    // 候选计数
+    const generated = data.candidates_generated ?? 0;
+    const maxC = data.max_candidates ?? 0;
+    optCandidatesEl.textContent = `${generated}/${maxC}`;
+
+    // 最佳参数
+    const best = data.best_params;
+    if (best && Object.keys(best).length > 0) {
+        const summary = `KP=${best.KP?.toFixed(1)} V=${best.VBASE?.toFixed(0)}`;
+        optBestEl.textContent = summary;
+    } else {
+        optBestEl.textContent = "-";
+    }
+
+    // 消息
+    const msg = data.msg || "";
+    if (msg) {
+        optMessageEl.textContent = msg;
+        optMessageEl.className = "opt-message";
+    } else {
+        optMessageEl.textContent = label;
+        optMessageEl.className = "opt-message";
+    }
+
+    // 按钮状态
+    const isActive = state !== "idle" && state !== "converged" && state !== "aborted";
+    btnOptStart.disabled = isActive;
+    btnOptStop.disabled = !isActive;
+    btnOptConfirm.disabled = state !== "awaiting_confirm";
+    btnOptExport.disabled = generated === 0;
+    btnOptExportRace.disabled = !best || Object.keys(best).length === 0;
+});
+
+socket.on("optimizer_candidate", (data) => {
+    const row = document.createElement("div");
+    const accepted = data.accepted;
+    row.className = `opt-cand-row ${accepted ? "is-accepted" : "is-rejected"}`;
+
+    const params = data.params || {};
+    const paramSummary = Object.entries(params)
+        .map(([k, v]) => `${k}=${typeof v === "number" ? v.toFixed(1) : v}`)
+        .join(" ");
+
+    const resultText = accepted ? "采纳" : (data.abort_reason || "拒绝");
+
+    row.innerHTML =
+        `<span class="opt-cand-idx">#${data.index}</span>` +
+        `<span class="opt-cand-params"></span>` +
+        `<span class="opt-cand-result">${resultText}</span>`;
+    row.querySelector(".opt-cand-params").textContent = paramSummary;
+
+    optCandidateList.appendChild(row);
+    optCandidateList.scrollTop = optCandidateList.scrollHeight;
+    while (optCandidateList.children.length > 50) {
+        optCandidateList.removeChild(optCandidateList.firstChild);
+    }
+});
+
+socket.on("optimizer_report", (report) => {
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `optimizer-report-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+});
+
+socket.on("optimizer_race_header", (data) => {
+    const box = document.getElementById("opt-race-header");
+    if (data.error) {
+        box.textContent = `错误: ${data.error}`;
+        return;
+    }
+    box.textContent = data.content || "";
 });
 
 setInterval(() => {
